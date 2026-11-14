@@ -53,6 +53,14 @@ description = "agents waiting on me, by queue"
 Python 3 standard library only. Install it on every machine you connect to with `herdr machine`, since the popup
 runs on whichever machine the window is showing.
 
+## The sidebar in queue order
+
+`s` in the popup sorts herdr's sidebar on every machine by your queues: workspaces holding agents of the first queue
+first (blocked, then done, idle, working), then the next queue, then the rest as they were. `s` again puts back your
+own order, saved when you left it; workspaces made since go last. herdr's agent panel follows the workspace order
+(`ui.agent_panel_sort = "spaces"`, the default), so it reorders too. Another machine is reordered over ssh
+(`workspace.move` is a socket call the CLI lacks), so one this machine cannot ssh to keeps its order.
+
 ## Jumping to another machine: run the watcher where you sit
 
 A plugin can't switch the herdr window to another machine

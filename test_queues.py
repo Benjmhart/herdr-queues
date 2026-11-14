@@ -102,4 +102,12 @@ d = tempfile.mkdtemp()
 S.STATE, S.OLD_STATE = os.path.join(d, "queues.json"), os.path.join(d, "streams.json")
 json.dump({"streams": ["home"], "members": {"t:x": "home"}}, open(S.OLD_STATE, "w"))
 assert S.load() == {"queues": ["home"], "members": {"t:x": "home"}}
+# the sidebar's order: by the best (queue, status) per workspace, the rest as they were; restoring puts new ones last
+st = {"queues": ["personal", "work"], "members": {}}
+ag = [{"workspace_id": "w3", "agent_status": "idle", "terminal_id": "t3", "host": "h"},
+      {"workspace_id": "w1", "agent_status": "blocked", "terminal_id": "t1", "host": "h"},
+      {"workspace_id": "w2", "agent_status": "done", "terminal_id": "t2", "host": "h"}]
+S.put(st, ag[0], "personal"); S.put(st, ag[1], "work"); S.put(st, ag[2], "work")
+assert S.by_queues(st, ag, ["w1", "w2", "w3", "w4", "w5"]) == ["w3", "w1", "w2", "w4", "w5"]
+assert S.restored(["w5", "w1", "w9"], ["w1", "w2", "w5"]) == ["w5", "w1", "w2"]
 print("ok migrate")

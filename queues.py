@@ -10,7 +10,7 @@ each with one line of what it needs. Enter jumps to the agent, switching the her
 
 Standard library only. Data loads in a background thread, so keys never wait on the network.
 """
-import curses, json, os, re, socket, subprocess, sys, threading, time
+import curses, json, os, re, shlex, socket, subprocess, sys, threading, time
 from concurrent.futures import ThreadPoolExecutor
 
 PLUGIN = "benjmhart.queues"
@@ -281,6 +281,75 @@ def members(state, live, queue, everyone=False):
     return sorted(mine, key=lambda a: (rank.get(a.get("agent_status"), 4), a.get("machine", ""), a.get("workspace", "")))
 
 
+# --- the sidebar's order (Ben 2026-11-14: "resortable by workspace order", "resortable by herdr-queues order") ----
+# `s` in the popup flips every machine's workspace order between the queues' order and your own. Your own is saved
+# (state["order"], per host, workspace ids) when it is left, and put back exactly; workspaces made since go last.
+# herdr's agent panel (ui.agent_panel_sort = "spaces") follows the workspace order, so it moves too. workspace.move is
+# a socket call the CLI lacks: run here, or over ssh on another machine (not one this one can't reach, e.g. micro).
+
+MOVE = r'''
+import json, os, socket, sys
+P = os.environ.get("HERDR_SOCKET_PATH") or os.path.expanduser("~/.config/herdr/herdr.sock")
+for i, w in enumerate(json.loads(sys.argv[1])):
+    with socket.socket(socket.AF_UNIX) as s:
+        s.connect(P)
+        s.sendall((json.dumps({"id": "q", "method": "workspace.move", "params": {"workspace_id": w, "insert_index": i}}) + "\n").encode())
+        s.makefile().readline()
+'''
+
+
+def by_queues(state, agents, ids):
+    """Workspace ids in the queues' order: by the best (queue, status) of the agents in each; then the rest as they were."""
+    rank = {"blocked": 0, "done": 1, "idle": 2, "working": 3}
+    best = {}
+    for a in agents:
+        q = queue_of(state, a)
+        k = (state["queues"].index(q) if q in state["queues"] else len(state["queues"]), rank.get(a.get("agent_status"), 4))
+        w = a.get("workspace_id")
+        if w in ids and k < best.get(w, (99, 99)):
+            best[w] = k
+    return sorted(ids, key=lambda w: (best.get(w, (99, 99)), ids.index(w)))
+
+
+def restored(saved, ids):
+    """Your saved order, then workspaces made since (in their current order)."""
+    return [w for w in saved if w in ids] + [w for w in ids if w not in saved]
+
+
+def workspace_ids(label):
+    return [w["workspace_id"] for w in json.loads(herdr(label, "workspace", "list", timeout=5))["result"]["workspaces"]]
+
+
+def apply_order(label, target, order):
+    cmd = [sys.executable, "-c", MOVE, json.dumps(order)] if not target else [
+        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", target,
+        "python3 -c " + shlex.quote(MOVE) + " " + shlex.quote(json.dumps(order))]
+    subprocess.run(cmd, capture_output=True, timeout=20, check=True)
+
+
+def resort(state, agents, ms):
+    """Flip the sidebar on every machine; returns a message. Mutates state (save it after)."""
+    to_queues = state.get("sort") != "queues"
+    saved = state.setdefault("order", {})
+    done, skipped = [], []
+    for label, (host, target) in ms.items():
+        try:
+            ids = workspace_ids(label)
+            if to_queues:
+                saved[host] = ids  # your order, as it is now
+                order = by_queues(state, [a for a in agents if a.get("host") == host], ids)
+            else:
+                order = restored(saved.get(host, ids), ids)
+            if order != ids:
+                apply_order(label, target, order)
+            done.append(host)
+        except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError):
+            skipped.append(host)
+    state["sort"] = "queues" if to_queues else "workspaces"
+    return (f"sidebar: {'queue' if to_queues else 'your workspace'} order on {len(done)} machine(s)"
+            + (f"; not reached: {', '.join(skipped)}" if skipped else ""))
+
+
 # --- jumping: a plugin can't switch the window's machine (herdr #5904), so the window's Goto picker is driven -----
 # The popup runs on the server the window shows, which may have no way to reach your display. So it appends a
 # request to its own REQUESTS file, and `queues.py watch` on the machine you sit at follows that file on every
@@ -431,7 +500,7 @@ def watch():
 # --- the list ---------------------------------------------------------------------------------------------------
 
 HELP = ("←→/h l/tab queue · ↑↓/j k pgup pgdn g G · enter: go to agent · m: move to queue · 1-9: move to that queue · a: waiting only/all\n"
-        "queues: n new · r rename · d delete · </> reorder · q quit")
+        "queues: n new · r rename · d delete · </> reorder · s: sidebar by queues / your order · q quit")
 ARROWS = {"A": "up", "B": "down", "C": "right", "D": "left"}
 NAMED = {curses.KEY_NPAGE: "pgdn", curses.KEY_PPAGE: "pgup", curses.KEY_HOME: "home", curses.KEY_END: "end",
          curses.KEY_UP: "up", curses.KEY_DOWN: "down", curses.KEY_LEFT: "left", curses.KEY_RIGHT: "right",
@@ -658,6 +727,12 @@ def ui(scr):
             sel = len(q) - 1
         elif c == "a":
             everyone = not everyone
+        elif c == "s":
+            msg = "sorting the sidebar…"
+            put_str(scr, scr.getmaxyx()[0] - 1, 0, msg)
+            scr.refresh()
+            msg = resort(state, agents, ms)
+            save(state)
         elif c == "enter" and q:
             msg = go(q[sel], ms)
             if not msg:
