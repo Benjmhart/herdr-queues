@@ -127,6 +127,25 @@ def put(state, agent, stream):
             state["members"].pop(k, None)
 
 
+def rename(state, old, new):
+    state["streams"] = [new if x == old else x for x in state["streams"]]
+    state["members"] = {k: new if f == old else f for k, f in state["members"].items()}
+
+
+def delete(state, name):
+    """Its agents go back to unsorted."""
+    state["streams"].remove(name)
+    state["members"] = {k: f for k, f in state["members"].items() if f != name}
+
+
+def shift(state, name, d):
+    """Move a stream one place left (d=-1) or right (d=1) in the tab order."""
+    t, i = state["streams"], state["streams"].index(name)
+    j = max(0, min(len(t) - 1, i + d))
+    t[i], t[j] = t[j], t[i]
+    return j
+
+
 def tabs(state, live):
     """Stream names in order, with unsorted last when an agent is in it."""
     t = list(state["streams"])
@@ -136,15 +155,18 @@ def tabs(state, live):
 
 
 def queue(state, live, stream, everyone=False):
-    """The stream's agents: blocked first, then done, then (with everyone) the rest; workspace order within."""
+    """The stream's agents: blocked first, then done, then (with everyone) the rest. Unsorted always lists everyone:
+    it is where agents are filed from."""
     rank = {"blocked": 0, "done": 1, "idle": 2, "working": 3}
+    everyone = everyone or stream == UNSORTED
     mine = [a for a in live if stream_of(state, a) == stream and (everyone or a.get("agent_status") in WAITING)]
     return sorted(mine, key=lambda a: rank.get(a.get("agent_status"), 4))
 
 
 # --- the popup ----------------------------------------------------------------------------------------------------
 
-HELP = "tab/←→ stream · j/k · enter: go to agent · s: set stream · a: all/waiting · q quit"
+HELP = ("tab/←→ stream · j/k · enter: go to agent · 1-9: file agent in that stream · s: file by name · a: all/waiting\n"
+        "streams: n new · r rename · d delete · </> move · q quit")
 
 
 def prompt(scr, label, initial=""):
@@ -193,10 +215,12 @@ def ui(scr):
             if x + len(t) < w:
                 scr.addstr(0, x, t, (curses.A_REVERSE if i == cur else 0) | (curses.A_BOLD if n else curses.A_DIM))
             x += len(t) + 1
-        scr.addstr(1, 0, HELP[:w - 1], curses.A_DIM)
-        row = 3
+        for i, ln in enumerate(HELP.splitlines()):
+            scr.addstr(1 + i, 0, ln[:w - 1], curses.A_DIM)
+        row = 4
         if not q:
-            scr.addstr(row, 2, ("no agents in this stream" if everyone else "nothing waiting on you here")[:w - 3])
+            scr.addstr(row, 2, ("no agents in this stream" if everyone else
+                                "nothing waiting on you here (a: show all its agents)")[:w - 3])
         for i, a in enumerate(q):
             if row + 1 >= h - 1:
                 break
@@ -241,6 +265,29 @@ def ui(scr):
             put(state, q[sel], name or None)
             save(state)
             msg = f"moved to {name or UNSORTED}"
+        elif isinstance(c, str) and c in "123456789" and q and int(c) <= len(state["streams"]):
+            name = state["streams"][int(c) - 1]
+            put(state, q[sel], name)
+            save(state)
+            msg = f"moved to {name}"
+        elif c == "n":
+            name = prompt(scr, "new stream: ")
+            if name and name != UNSORTED and name not in state["streams"]:
+                state["streams"].append(name)
+                save(state)
+                cur = len(state["streams"]) - 1
+        elif c == "r" and streams[cur] != UNSORTED:
+            name = prompt(scr, "rename stream to: ", streams[cur])
+            if name and name != UNSORTED and name not in state["streams"]:
+                rename(state, streams[cur], name)
+                save(state)
+        elif c == "d" and streams[cur] != UNSORTED:
+            if prompt(scr, f"delete stream {streams[cur]}? its agents go to unsorted (y/N) ").lower() == "y":
+                delete(state, streams[cur])
+                save(state)
+        elif c in ("<", ">") and streams[cur] != UNSORTED:
+            cur = shift(state, streams[cur], -1 if c == "<" else 1)
+            save(state)
 
 
 def main(cmd):

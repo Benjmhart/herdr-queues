@@ -5,7 +5,8 @@ waiting on you, each with one line saying what it needs. Select one and herdr ju
 
 ```
  personal 1   work 3   unsorted 2
-tab/←→ stream · j/k · enter: go to agent · s: set stream · a: all/waiting · q quit
+tab/←→ stream · j/k · enter: go to agent · 1-9: file agent in that stream · s: file by name · a: all/waiting
+streams: n new · r rename · d delete · </> move · q quit
 ! mlabs-marketing  Sales and marketing strategy for new customers
     Bash command: Save report, update nag, commit and push -- Do you want to proceed?
 ! castiron  next-story:bmad-pony loop
@@ -18,8 +19,10 @@ tab/←→ stream · j/k · enter: go to agent · s: set stream · a: all/waitin
   `a` shows every agent in the stream.
 - **The summary** is the agent's own `※ recap:` line when Claude Code printed one, else the question on its screen
   (a permission prompt is named by its tool and description), else its last line of output.
-- **Streams**: `s` puts the selected agent in a stream; a new name creates one. Agents not in a stream are in
-  `unsorted`. Membership follows the agent's session, so it survives a herdr restart.
+- **Filing agents**: every agent starts in `unsorted`, which always lists all of them. Select one and press the
+  stream's number (`1` = the first tab) or `s` to type a stream name (a new name creates it).
+- **Your own streams**: `n` new, `r` rename, `d` delete (its agents go back to unsorted), `<` / `>` move the tab.
+  The defaults are personal and work. Membership follows the agent's session, so it survives a herdr restart.
 
 ## Install
 

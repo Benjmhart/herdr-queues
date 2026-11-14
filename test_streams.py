@@ -67,3 +67,15 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
 """
 assert S.summary(ask) == "9.11 scope: How should I proceed?", S.summary(ask)
 print("ok ask")
+
+s = {"streams": ["personal", "work", "games"], "members": {}}
+S.put(s, a, "work")
+S.rename(s, "work", "job")
+assert s["streams"] == ["personal", "job", "games"] and S.stream_of(s, a) == "job"
+assert S.shift(s, "games", -1) == 1 and s["streams"] == ["personal", "games", "job"]
+assert S.shift(s, "personal", -1) == 0 and s["streams"][0] == "personal"   # already first: stays
+S.delete(s, "job")
+assert s["streams"] == ["personal", "games"] and S.stream_of(s, a) == S.UNSORTED
+idle = dict(c, agent_status="idle")
+assert S.queue(s, [idle], S.UNSORTED) == [idle]                 # unsorted lists everyone, waiting or not
+print("ok streams editing")
