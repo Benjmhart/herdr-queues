@@ -430,7 +430,7 @@ def watch():
 
 # --- the list ---------------------------------------------------------------------------------------------------
 
-HELP = ("←→/h l/tab queue · ↑↓/j k · enter: go to agent · m: move to queue · 1-9: move to that queue · a: all/waiting\n"
+HELP = ("←→/h l/tab queue · ↑↓/j k · enter: go to agent · m: move to queue · 1-9: move to that queue · a: waiting only/all\n"
         "queues: n new · r rename · d delete · </> reorder · q quit")
 ARROWS = {"A": "up", "B": "down", "C": "right", "D": "left"}
 NAMED = {curses.KEY_UP: "up", curses.KEY_DOWN: "down", curses.KEY_LEFT: "left", curses.KEY_RIGHT: "right",
@@ -540,7 +540,9 @@ def ui(scr):
     scr.timeout(250)
     ms = machines()
     live = Live(ms)
-    state, cur, sel, everyone, msg, drawn = load(), None, 0, False, "", None
+    # Every agent in the queue, waiting ones first (Ben 2026-11-14: a queue is worked through, so all of it shows);
+    # `a` narrows it to the ones waiting on you. The number on a tab counts the waiting ones.
+    state, cur, sel, everyone, msg, drawn = load(), None, 0, True, "", None
 
     while True:
         agents, sums, version = live.snapshot()
@@ -568,8 +570,8 @@ def ui(scr):
             if not live.loaded:
                 scr.addstr(row, 2, f"loading {len(ms)} machines…"[:w - 3], curses.A_DIM)
             elif not q:
-                scr.addstr(row, 2, ("no agents in this queue" if everyone else
-                                    "nothing waiting on you here (a: show all its agents)")[:w - 3])
+                scr.addstr(row, 2, ("no agents in this queue (m on an agent in another queue moves it here)" if everyone
+                                    else "nothing waiting on you here (a: show all its agents)")[:w - 3])
             for i, a in enumerate(q):
                 if row + 1 >= h - 1:
                     break

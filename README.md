@@ -19,8 +19,8 @@ queues: n new · r rename · d delete · </> reorder · q quit
     Stories 6.15 and 6.16 are merged and staging is green, which finishes all of Epic 6. The loop is paused until…
 ```
 
-- **Waiting** means blocked (`!`, it asked you something) or done (`✓`, it finished). Blocked come first. `a` shows
-  every agent in the queue.
+- **A queue lists all its agents**, the waiting ones first: blocked (`!`, it asked you something), then done (`✓`, it
+  finished). The number on a tab counts the waiting ones. `a` narrows the list to the waiting ones.
 - **The summary** is the agent's own `※ recap:` line when Claude Code printed one, else the question on its screen
   (a permission prompt is named by its tool and description), else its last line of output.
 - **Every machine**: the server you are on plus every enabled machine in `herdr machine list`. Agents on this
