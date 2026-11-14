@@ -90,7 +90,7 @@ class Live:
         return ags
 
     def read(self, key, m, pane):
-        s = summary(screen(m, pane))
+        s = " ".join(summary(screen(m, pane)).split())  # one line, runs of spaces (a status bar) collapsed
         with self.lock:
             self.summary[key] = s
             self.version += 1
@@ -430,10 +430,11 @@ def watch():
 
 # --- the list ---------------------------------------------------------------------------------------------------
 
-HELP = ("←→/h l/tab queue · ↑↓/j k · enter: go to agent · m: move to queue · 1-9: move to that queue · a: waiting only/all\n"
+HELP = ("←→/h l/tab queue · ↑↓/j k pgup pgdn g G · enter: go to agent · m: move to queue · 1-9: move to that queue · a: waiting only/all\n"
         "queues: n new · r rename · d delete · </> reorder · q quit")
 ARROWS = {"A": "up", "B": "down", "C": "right", "D": "left"}
-NAMED = {curses.KEY_UP: "up", curses.KEY_DOWN: "down", curses.KEY_LEFT: "left", curses.KEY_RIGHT: "right",
+NAMED = {curses.KEY_NPAGE: "pgdn", curses.KEY_PPAGE: "pgup", curses.KEY_HOME: "home", curses.KEY_END: "end",
+         curses.KEY_UP: "up", curses.KEY_DOWN: "down", curses.KEY_LEFT: "left", curses.KEY_RIGHT: "right",
          curses.KEY_ENTER: "enter", curses.KEY_BTAB: "left", curses.KEY_BACKSPACE: "backspace"}
 
 
@@ -464,7 +465,10 @@ def key(scr):
         finally:
             scr.nodelay(False)
             scr.timeout(250)
-        return ARROWS.get(seq[-1:], "esc") if seq[:1] in ("[", "O") else "esc"
+        if seq[:1] in ("[", "O"):
+            return {"5~": "pgup", "6~": "pgdn", "H": "home", "F": "end", "1~": "home", "4~": "end"}.get(
+                seq[1:], ARROWS.get(seq[-1:], "esc"))
+        return "esc"
     return c
 
 
@@ -533,16 +537,51 @@ def go(agent, ms):
     return None
 
 
+# Dracula, the fleet's palette (on 256 colours; plain ANSI otherwise). No A_DIM: unreadable on a translucent terminal.
+PALETTE = {"blocked": (210, 1), "done": (84, 2), "working": (228, 3), "idle": (103, 8), "machine": (141, 5),
+           "workspace": (117, 6), "summary": (188, 7), "help": (103, 8), "tab": (236, 0), "tabbg": (141, 5),
+           "select": (231, 7), "selectbg": (239, 4)}
+C = {}
+
+
+def colours():
+    curses.use_default_colors()
+    if not curses.has_colors():
+        return
+    big = curses.COLORS >= 256
+    pick = lambda name: PALETTE[name][0 if big else 1]
+    pairs = {"blocked": ("blocked", -1), "done": ("done", -1), "working": ("working", -1), "idle": ("idle", -1),
+             "machine": ("machine", -1), "workspace": ("workspace", -1), "summary": ("summary", -1),
+             "help": ("help", -1), "tab": ("tab", "tabbg"), "select": ("select", "selectbg")}
+    for n, (name, (fg, bg)) in enumerate(pairs.items(), 1):
+        try:
+            curses.init_pair(n, pick(fg), -1 if bg == -1 else pick(bg))
+            C[name] = curses.color_pair(n)
+        except curses.error:
+            pass
+
+
+def put_str(scr, y, x, text, attr=0):
+    """addstr that clips to the screen and never raises at the last cell."""
+    h, w = scr.getmaxyx()
+    if 0 <= y < h and x < w - 1:
+        try:
+            scr.addstr(y, x, text[:w - 1 - x], attr)
+        except curses.error:
+            pass
+    return x + len(text)
+
+
 def ui(scr):
     os.environ.setdefault("ESCDELAY", "25")
     curses.curs_set(0)
-    curses.use_default_colors()
+    colours()
     scr.timeout(250)
     ms = machines()
     live = Live(ms)
     # Every agent in the queue, waiting ones first (Ben 2026-11-14: a queue is worked through, so all of it shows);
     # `a` narrows it to the ones waiting on you. The number on a tab counts the waiting ones.
-    state, cur, sel, everyone, msg, drawn = load(), None, 0, True, "", None
+    state, cur, sel, everyone, msg, drawn, top = load(), None, 0, True, "", None, 0
 
     while True:
         agents, sums, version = live.snapshot()
@@ -553,39 +592,48 @@ def ui(scr):
             cur %= len(qs)
         q = members(state, agents, qs[cur or 0], everyone)
         sel = max(0, min(sel, len(q) - 1))
-        if drawn != (version, cur, sel, everyone, msg, len(state["queues"])):
-            drawn = (version, cur, sel, everyone, msg, len(state["queues"]))
-            h, w = scr.getmaxyx()
+        h, w = scr.getmaxyx()
+        rows = max(1, h - 5)  # tabs, two help lines, a blank, the list, the message line
+        top = min(max(top, sel - rows + 1), sel, max(0, len(q) - rows))  # keep the selection in view
+        top = max(0, top)
+        if drawn != (version, cur, sel, everyone, msg, len(state["queues"]), top, h, w):
+            drawn = (version, cur, sel, everyone, msg, len(state["queues"]), top, h, w)
             scr.erase()
             x = 0
             for i, s in enumerate(qs):
                 n = len(members(state, agents, s))
                 t = f" {s} {n} " if n else f" {s} "
-                if x + len(t) < w:
-                    scr.addstr(0, x, t, (curses.A_REVERSE if i == (cur or 0) else 0) | (curses.A_BOLD if n else curses.A_DIM))
-                x += len(t) + 1
+                x = put_str(scr, 0, x, t, (C.get("tab", curses.A_REVERSE) if i == (cur or 0) else 0)
+                            | (curses.A_BOLD if n else 0)) + 1
             for i, ln in enumerate(HELP.splitlines()):
-                scr.addstr(1 + i, 0, ln[:w - 1], curses.A_DIM)
-            row = 4
+                put_str(scr, 1 + i, 0, ln, C.get("help", 0))
             if not live.loaded:
-                scr.addstr(row, 2, f"loading {len(ms)} machines…"[:w - 3], curses.A_DIM)
+                put_str(scr, 4, 2, f"loading {len(ms)} machines…", C.get("help", 0))
             elif not q:
-                scr.addstr(row, 2, ("no agents in this queue (m on an agent in another queue moves it here)" if everyone
-                                    else "nothing waiting on you here (a: show all its agents)")[:w - 3])
-            for i, a in enumerate(q):
-                if row + 1 >= h - 1:
-                    break
+                put_str(scr, 4, 2, "no agents in this queue (m on an agent in another queue moves it here)" if everyone
+                        else "nothing waiting on you here (a: show all its agents)")
+            for i, a in enumerate(q[top:top + rows]):
+                row, st = 4 + i, a.get("agent_status")
                 title = a.get("terminal_title_stripped") or os.path.basename(a.get("cwd", ""))
-                where = f"{a['machine']} · {a['workspace']}" if a["machine"] else a["workspace"]
-                scr.addstr(row, 0, f"{ICON.get(a.get('agent_status'), '?')} {where}  {title}"[:w - 1],
-                           (curses.A_REVERSE if i == sel else 0) | curses.A_BOLD)
-                s = sums.get(skey(a)) if a.get("agent_status") in WAITING else ""
-                if a.get("agent_status") in WAITING:
-                    scr.addstr(row + 1, 4, (s if s is not None else "…")[:w - 5], curses.A_DIM)
-                    row += 1
-                row += 2
+                s = sums.get(skey(a)) if st in WAITING else ""
+                if i + top == sel:  # the selected line: one solid bar
+                    line = f" {ICON.get(st, '?')} {(a['machine'] + ' · ') if a['machine'] else ''}{a['workspace']}  {title}"
+                    line += f"  — {s if s is not None else '…'}" if st in WAITING else ""
+                    put_str(scr, row, 0, line.ljust(w - 1), C.get("select", curses.A_REVERSE) | curses.A_BOLD)
+                    continue
+                x = put_str(scr, row, 1, ICON.get(st, "?"), C.get(st, 0) | curses.A_BOLD) + 1
+                if a["machine"]:
+                    x = put_str(scr, row, x, a["machine"], C.get("machine", 0)) 
+                    x = put_str(scr, row, x, " · ", C.get("help", 0))
+                x = put_str(scr, row, x, a["workspace"], C.get("workspace", 0) | curses.A_BOLD) + 2
+                x = put_str(scr, row, x, title, curses.A_BOLD if st in WAITING else 0)
+                if st in WAITING:
+                    put_str(scr, row, x + 2, "— " + (s if s is not None else "…"), C.get("summary", 0))
+            if len(q) > rows:  # where you are in a long list
+                put_str(scr, h - 1, max(0, w - 12), f"{top + 1}-{min(len(q), top + rows)}/{len(q)}".rjust(11),
+                        C.get("help", 0))
             if msg:
-                scr.addstr(h - 1, 0, msg[:w - 1], curses.A_DIM)
+                put_str(scr, h - 1, 0, msg, C.get("summary", 0))
             scr.refresh()
 
         c = key(scr)
@@ -602,6 +650,12 @@ def ui(scr):
             sel += 1
         elif c in ("up", "k"):
             sel -= 1
+        elif c in ("pgdn", "pgup"):
+            sel += (1 if c == "pgdn" else -1) * max(1, scr.getmaxyx()[0] - 6)
+        elif c in ("home", "g"):
+            sel = 0
+        elif c in ("end", "G"):
+            sel = len(q) - 1
         elif c == "a":
             everyone = not everyone
         elif c == "enter" and q:
@@ -660,7 +714,8 @@ def main(cmd):
         with socket.socket(socket.AF_UNIX) as sk:
             sk.connect(os.environ["HERDR_SOCKET_PATH"])
             sk.sendall((json.dumps({"id": "queues", "method": "plugin.pane.open", "params": {
-                "plugin_id": os.environ["HERDR_PLUGIN_ID"], "entrypoint": "ui", "focus": True}}) + "\n").encode())
+                "plugin_id": os.environ["HERDR_PLUGIN_ID"], "entrypoint": "ui", "focus": True,
+                "width": "98%", "height": "96%"}}) + "\n").encode())
             resp = json.loads(sk.makefile().readline())
         if "error" in resp:
             raise RuntimeError(f"plugin.pane.open: {resp['error']}")

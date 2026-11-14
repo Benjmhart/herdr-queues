@@ -25,6 +25,8 @@ queues: n new · r rename · d delete · </> reorder · q quit
   (a permission prompt is named by its tool and description), else its last line of output.
 - **Every machine**: the server you are on plus every enabled machine in `herdr machine list`. Agents on this
   server show bare; the rest as `machine · workspace`. A machine that doesn't answer is skipped for a minute.
+- **One line per agent**, in the Dracula palette; the list scrolls with the selection (↑↓, PgUp/PgDn, `g`/`G`),
+  and the popup opens at 98 % × 96 % of the window.
 - **Fast**: the list opens at once and fills in the background (about two seconds for five machines); keys never
   wait on the network.
 - **Filing agents**: every agent starts in `unsorted`, which always lists all of them. `m` opens a list of the
@@ -42,7 +44,7 @@ Bind a key in `~/.config/herdr/config.toml`:
 
 ```toml
 [[keys.command]]
-key = "prefix+shift+q"
+key = "prefix+u"
 type = "plugin_action"
 command = "benjmhart.queues.open"
 description = "agents waiting on me, by queue"
