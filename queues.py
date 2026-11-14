@@ -331,6 +331,13 @@ def follow(label, ms):
 
 
 def watch():
+    import fcntl
+    os.makedirs(STATE_DIR, exist_ok=True)
+    lock = open(os.path.join(STATE_DIR, "watch.lock"), "w")
+    try:  # one watcher per user: two would type into the window together
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        sys.exit("herdr-queues: a watcher is already running")
     ms = machines()
     for label in ms:
         threading.Thread(target=follow, args=(label, ms), daemon=True).start()
