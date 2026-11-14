@@ -493,8 +493,54 @@ def watch():
         threading.Thread(target=push, args=(load(), ms, ""), daemon=True).start()
     for label in ms:
         threading.Thread(target=follow, args=(label, ms), daemon=True).start()
+    threading.Thread(target=nag, args=(ms,), daemon=True).start()
     while True:
         time.sleep(3600)
+
+
+# How long an agent may wait on you before a desktop notification says so. blocked = it asked something (a permission
+# or a question). done = it finished its turn and you haven't looked: a /loop sleeping until its next wakeup is "done"
+# too, for up to an hour (ScheduleWakeup's limit), so done waits longer than that. Viewing the agent (idle) ends it.
+NAG = {"blocked": 10 * 60, "done": 65 * 60}
+
+
+def nag_due(seen, ags, now):
+    """One round: update seen {key: [status, since, told]} from ags [(key, status, name)], return the names now due.
+    An agent already waiting when first seen isn't told about (an old finished session isn't news); each wait is told
+    once."""
+    due = []
+    for k, st, name in ags:
+        old = seen.get(k)
+        if old is None:
+            seen[k] = [st, now, True]
+        elif old[0] != st:
+            seen[k] = [st, now, False]
+        elif not old[2] and st in NAG and now - old[1] >= NAG[st]:
+            old[2] = True
+            due.append(f"{name}: {st} {int((now - old[1]) // 60)} min")
+    return due
+
+
+def nag(ms):
+    """Tell you, on this desk, about agents on any machine left waiting on you (station-maintenance fleet 30)."""
+    seen = {}
+    while True:
+        ags = []
+        for m in ms:
+            try:
+                for a in json.loads(herdr(m, "agent", "list", timeout=4))["result"]["agents"]:
+                    name = f"{ms[m][0]} {a.get('terminal_title_stripped') or a['pane_id']}"
+                    ags.append(((m, a["pane_id"]), a.get("agent_status"), name))
+            except (RuntimeError, OSError, ValueError, KeyError, subprocess.TimeoutExpired):
+                pass
+        due = nag_due(seen, ags, time.time())
+        if due:
+            try:
+                subprocess.run(["notify-send", "-a", "herdr-queues", "Agents waiting on you (mod+shift+s)", "\n".join(due)],
+                               timeout=10)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        time.sleep(60)
 
 
 # --- the list ---------------------------------------------------------------------------------------------------

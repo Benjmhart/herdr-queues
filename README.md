@@ -91,6 +91,14 @@ to every machine, so the popup on any machine opens with the same queues. A watc
 focused window is a herdr window showing the requesting machine and the screen is not locked, so watchers on other
 desks (locked, or showing something else) stay still. Without a watcher, each machine keeps its own queues.
 
+## Agents left waiting: a notification
+
+The watcher also checks every machine's agents once a minute and sends a desktop notification (`notify-send`) when one
+has waited on you too long: **blocked** (it asked a permission or a question) for 10 minutes, or **done** (it finished
+and you haven't looked) for 65 minutes. done waits longer because a `/loop` agent sleeping until its next wakeup (at
+most an hour) shows as done too. Each wait is told once; looking at the agent ends it. Agents already waiting when the
+watcher starts are left out. Every desk's watcher notifies on its own screen.
+
 ## Limits
 
 - X11 only for the machine switch (xdotool). On Wayland the jump can focus the agent but not switch machines.
