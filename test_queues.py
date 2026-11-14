@@ -1,5 +1,5 @@
-"""python3 test_streams.py: the stream logic and the summary heuristic, without a running herdr."""
-import streams as S
+"""python3 test_queues.py: the queue logic and the summary heuristic, without a running herdr."""
+import queues as S
 
 recap = """  Next: answer (a), (b) or (c), then run /loop /bmad-pony.
 
@@ -24,19 +24,19 @@ assert S.summary("") == ""
 a = {"pane_id": "w1:p1", "terminal_id": "term_a", "agent_session": {"value": "sess-a"}, "agent_status": "blocked"}
 b = {"pane_id": "w2:p1", "terminal_id": "term_b", "agent_status": "done"}
 c = {"pane_id": "w3:p1", "terminal_id": "term_c", "agent_status": "working"}
-s = {"streams": ["personal", "work"], "members": {}}
+s = {"queues": ["personal", "work"], "members": {}}
 S.put(s, a, "work")
 S.put(s, c, "work")
-assert S.stream_of(s, a) == "work" and S.stream_of(s, b) == S.UNSORTED
+assert S.queue_of(s, a) == "work" and S.queue_of(s, b) == S.UNSORTED
 # after a restart the pane id and terminal change but the session is the same
-assert S.stream_of(s, dict(a, pane_id="w9:p1", terminal_id="term_new")) == "work"
+assert S.queue_of(s, dict(a, pane_id="w9:p1", terminal_id="term_new")) == "work"
 assert S.tabs(s, [a, b]) == ["personal", "work", "unsorted"] and S.tabs(s, [a]) == ["personal", "work"]
-assert S.queue(s, [c, a, b], "work") == [a]                      # only the ones waiting
-assert S.queue(s, [c, a, b], "work", everyone=True) == [a, c]    # blocked first
-S.put(s, b, "games")                                             # a new stream is created on first use
-assert s["streams"] == ["personal", "work", "games"]
+assert S.members(s, [c, a, b], "work") == [a]                      # only the ones waiting
+assert S.members(s, [c, a, b], "work", everyone=True) == [a, c]    # blocked first
+S.put(s, b, "games")                                             # a new queue is created on first use
+assert s["queues"] == ["personal", "work", "games"]
 S.put(s, a, None)
-assert S.stream_of(s, a) == S.UNSORTED
+assert S.queue_of(s, a) == S.UNSORTED
 print("ok")
 
 perm = """────────────────────────────────
@@ -68,22 +68,30 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
 assert S.summary(ask) == "9.11 scope: How should I proceed?", S.summary(ask)
 print("ok ask")
 
-s = {"streams": ["personal", "work", "games"], "members": {}}
+s = {"queues": ["personal", "work", "games"], "members": {}}
 S.put(s, a, "work")
 S.rename(s, "work", "job")
-assert s["streams"] == ["personal", "job", "games"] and S.stream_of(s, a) == "job"
-assert S.shift(s, "games", -1) == 1 and s["streams"] == ["personal", "games", "job"]
-assert S.shift(s, "personal", -1) == 0 and s["streams"][0] == "personal"   # already first: stays
+assert s["queues"] == ["personal", "job", "games"] and S.queue_of(s, a) == "job"
+assert S.shift(s, "games", -1) == 1 and s["queues"] == ["personal", "games", "job"]
+assert S.shift(s, "personal", -1) == 0 and s["queues"][0] == "personal"   # already first: stays
 S.delete(s, "job")
-assert s["streams"] == ["personal", "games"] and S.stream_of(s, a) == S.UNSORTED
+assert s["queues"] == ["personal", "games"] and S.queue_of(s, a) == S.UNSORTED
 idle = dict(c, agent_status="idle")
-assert S.queue(s, [idle], S.UNSORTED) == [idle]                 # unsorted lists everyone, waiting or not
-print("ok streams editing")
+assert S.members(s, [idle], S.UNSORTED) == [idle]                 # unsorted lists everyone, waiting or not
+print("ok queues editing")
 
 # another machine's agent: same ids as a local one, kept apart by the machine prefix
 r = dict(c, machine="carbon")
 assert S.keys(r) == ["carbon/t:term_c"] and S.keys(dict(c, machine="")) == ["t:term_c"]
-s = {"streams": ["work"], "members": {}}
+s = {"queues": ["work"], "members": {}}
 S.put(s, r, "work")
-assert S.stream_of(s, r) == "work" and S.stream_of(s, c) == S.UNSORTED
+assert S.queue_of(s, r) == "work" and S.queue_of(s, c) == S.UNSORTED
 print("ok machines")
+
+# herdr-streams' state file is read when there is no queues.json yet
+import json, os, tempfile
+d = tempfile.mkdtemp()
+S.STATE, S.OLD_STATE = os.path.join(d, "queues.json"), os.path.join(d, "streams.json")
+json.dump({"streams": ["home"], "members": {"t:x": "home"}}, open(S.OLD_STATE, "w"))
+assert S.load() == {"queues": ["home"], "members": {"t:x": "home"}}
+print("ok migrate")

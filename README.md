@@ -1,78 +1,92 @@
-# herdr-streams
+# herdr-queues
 
-A [herdr](https://herdr.dev) plugin: one queue per **stream** (personal, work, anything you name) of the agents
-waiting on you **on every machine herdr knows** (`herdr machine list`), each with one line saying what it needs.
-Select one and herdr jumps to it, switching the window to that machine if it has to.
+A [herdr](https://herdr.dev) plugin: your own **queues** (personal, work, anything you name) of the agents waiting on
+you, **on every machine herdr knows**, each with one line saying what it needs. Press Enter and the herdr window
+switches to that agent's machine and focuses it.
 
 ```
  personal 1   work 3   unsorted 2
-tab/←→ stream · j/k · enter: go to agent · 1-9: file agent in that stream · s: file by name · a: all/waiting
-streams: n new · r rename · d delete · </> move · q quit
+←→/h l/tab queue · ↑↓/j k · enter: go to agent · m: move to queue · 1-9: move to that queue · a: all/waiting
+queues: n new · r rename · d delete · </> reorder · q quit
+
 ! beast-arch · mlabs-marketing  Sales and marketing strategy for new customers
     Bash command: Save report, update nag, commit and push -- Do you want to proceed?
+
 ! carbon · castiron  next-story:bmad-pony loop
     9.11 scope: How should I proceed?
+
 ✓ nihongo-smash  Next-story:bmad-pony loop
     Stories 6.15 and 6.16 are merged and staging is green, which finishes all of Epic 6. The loop is paused until…
 ```
 
-- **Waiting** means blocked (`!`, it asked you something) or done (`✓`, it finished). Blocked come first.
-  `a` shows every agent in the stream.
+- **Waiting** means blocked (`!`, it asked you something) or done (`✓`, it finished). Blocked come first. `a` shows
+  every agent in the queue.
 - **The summary** is the agent's own `※ recap:` line when Claude Code printed one, else the question on its screen
   (a permission prompt is named by its tool and description), else its last line of output.
-- **Filing agents**: every agent starts in `unsorted`, which always lists all of them. Select one and press the
-  stream's number (`1` = the first tab) or `s` to type a stream name (a new name creates it).
-- **Your own streams**: `n` new, `r` rename, `d` delete (its agents go back to unsorted), `<` / `>` move the tab.
-  The defaults are personal and work. Membership follows the agent's session, so it survives a herdr restart.
-- **Other machines**: agents on this server show bare; the rest as `machine · workspace`. A machine that doesn't
-  answer is skipped for a minute.
+- **Every machine**: the server you are on plus every enabled machine in `herdr machine list`. Agents on this
+  server show bare; the rest as `machine · workspace`. A machine that doesn't answer is skipped for a minute.
+- **Fast**: the list opens at once and fills in the background (about two seconds for five machines); keys never
+  wait on the network.
+- **Filing agents**: every agent starts in `unsorted`, which always lists all of them. `m` opens a list of the
+  other queues (or a new one) to move the selected agent into; `1`-`9` moves it straight to that queue.
+- **Your own queues**: `n` new, `r` rename, `d` delete (its agents go back to unsorted), `<` / `>` reorder.
+  Membership follows the agent's session, so it survives a herdr restart.
 
 ## Install
 
 ```sh
-herdr plugin install Benjmhart/herdr-streams
+herdr plugin install Benjmhart/herdr-queues
 ```
 
 Bind a key in `~/.config/herdr/config.toml`:
 
 ```toml
 [[keys.command]]
-key = "prefix+shift+s"
+key = "prefix+shift+q"
 type = "plugin_action"
-command = "benjmhart.streams.open"
-description = "agents waiting on me, by stream"
+command = "benjmhart.queues.open"
+description = "agents waiting on me, by queue"
 ```
 
-Python 3 standard library only.
+Python 3 standard library only. Install it on every machine you connect to with `herdr machine`, since the popup
+runs on whichever machine the window is showing.
 
-## Jumping to another machine
+## Jumping to another machine: run the watcher where you sit
 
 A plugin can't switch the herdr window to another machine
-([herdr #5904](https://github.com/herdrdev/herdr/issues/5904), not planned), so streams drives the window's own Goto
-picker: `prefix+a`, `/`, the machine's label, Enter (which switches the window), then `herdr --machine M agent
-focus`. That needs `xdotool` and the X display the herdr window is on, and the Goto picker on `prefix+a` with
-`prefix` = ctrl+b. The window is found by its title, herdr's default `{hostname}: {workspace}` (an optional
-`herdr: ` prefix is fine).
+([herdr #5904](https://github.com/herdrdev/herdr/issues/5904), not planned), and the popup runs on the server the
+window is showing, which may have no way back to your screen. So:
 
-The popup runs on the server the window is showing. When that is the machine with the display, every jump works.
-When the window is showing another machine, the popup can only jump within that machine. For that, run it from the
-desktop instead:
+1. Enter in the popup writes a one-line request (`<host> <pane>`) to the plugin's state on that server.
+2. `queues.py watch`, running on the machine you sit at, follows that file on every machine (`ssh <machine> tail
+   -F`, the same ssh herdr uses) and drives the window showing the requesting machine: `prefix+a` (Goto), `/`, the
+   machine's label, Enter (which switches the window), then `herdr --machine M agent focus P`. About 0.6 s.
+
+Start the watcher with your desktop session, e.g. in xmonad's startup hook or i3/sway `exec`:
 
 ```sh
-python3 "$(ls -dt ~/.config/herdr/plugins/github-installations/benjmhart.streams-*/*/checkout/streams.py | head -1)" standalone
+python3 "$(ls -dt ~/.config/herdr/plugins/github-installations/benjmhart.queues-*/*/checkout/queues.py | head -1)" watch
 ```
 
-in a terminal bound to a desktop key; outside herdr it shares the plugin's state on that machine.
+It needs `xdotool` and an X11 display, the Goto picker on `prefix+a` with `prefix` = ctrl+b, and herdr's window
+title in its default shape, `{hostname}: {workspace}` (a `herdr: ` prefix is fine). Without a watcher, Enter on
+this server's own agents still works; on another machine's it does nothing visible.
+
+`queues.py standalone` runs the same list outside herdr (bind it to a desktop key); it drives the window itself.
 
 ## Limits
 
-- Streams (the names and who is filed where) are kept per machine: the popup on carbon and the one on beast-arch
-  keep their own.
-- Jumping is X11 only (xdotool). On Wayland the jump focuses the agent but cannot switch the window's machine.
+- Queues (names and who is filed where) are kept per machine.
+- X11 only for the machine switch (xdotool). On Wayland the jump can focus the agent but not switch machines.
 - The summary scrapes the visible screen and is tuned on Claude Code; other agents show their last line.
+
+## Upgrading from herdr-streams
+
+The plugin id changed (`benjmhart.streams` → `benjmhart.queues`). Your streams are read once from the old state
+file; then `herdr plugin uninstall benjmhart.streams`.
 
 ## Test
 
-`python3 test_streams.py` (no herdr needed).
+`python3 test_queues.py` (no herdr needed).
 
 MIT licence.

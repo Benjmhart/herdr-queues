@@ -1,19 +1,19 @@
-id = "benjmhart.streams"
-name = "Streams"
-version = "0.3.0"
+id = "benjmhart.queues"
+name = "Queues"
+version = "0.4.0"
 min_herdr_version = "0.9.3"
-description = "Queues of agents waiting on you, one per stream (personal, work, ...), each with what it needs"
+description = "Your own queues (personal, work, ...) of the agents waiting on you, on every machine; Enter jumps there"
 platforms = ["linux", "macos"]
 
 [[actions]]
 id = "open"
-title = "Agent streams"
-command = ["python3", "streams.py", "open"]
+title = "Agent queues"
+command = ["python3", "queues.py", "open"]
 
 [[panes]]
 id = "ui"
-title = "Agent streams"
+title = "Agent queues"
 placement = "popup"
 width = "95%"
 height = "95%"
-command = ["python3", "streams.py", "ui"]
+command = ["python3", "queues.py", "ui"]
