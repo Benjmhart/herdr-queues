@@ -59,7 +59,7 @@ When the window is showing another machine, the popup can only jump within that 
 desktop instead:
 
 ```sh
-python3 ~/.config/herdr/plugins/github-installations/benjmhart.streams-*/streams.py standalone
+python3 "$(ls -dt ~/.config/herdr/plugins/github-installations/benjmhart.streams-*/*/checkout/streams.py | head -1)" standalone
 ```
 
 in a terminal bound to a desktop key; outside herdr it shares the plugin's state on that machine.
