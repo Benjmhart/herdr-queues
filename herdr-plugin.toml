@@ -1,0 +1,19 @@
+id = "benjmhart.streams"
+name = "Streams"
+version = "0.1.0"
+min_herdr_version = "0.9.3"
+description = "Queues of agents waiting on you, one per stream (personal, work, ...), each with what it needs"
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "open"
+title = "Agent streams"
+command = ["python3", "streams.py", "open"]
+
+[[panes]]
+id = "ui"
+title = "Agent streams"
+placement = "popup"
+width = "80%"
+height = "80%"
+command = ["python3", "streams.py", "ui"]
