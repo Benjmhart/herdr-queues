@@ -521,19 +521,59 @@ def nag_due(seen, ags, now):
     return due
 
 
+UNSENT_AFTER = 5 * 60  # a reply typed into an idle agent's prompt and never sent (twice on 2026-11-14)
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def typed(screen_ansi):
+    """The text sitting in a Claude Code prompt, "" if none. Its prompt is "❯" + a no-break space (a shell prompt has a
+    plain space); a suggested prompt is drawn dim (ESC[2m) and isn't anything typed."""
+    for line in reversed(screen_ansi.splitlines()):
+        if "❯\u00a0" not in line:
+            continue
+        rest = line.split("❯\u00a0", 1)[1].rstrip("\r")
+        if rest.replace("\x1b[0m", "").startswith("\x1b[2m"):
+            return ""
+        return ANSI.sub("", rest).strip()
+    return ""
+
+
+def unsent_due(seen, rows, now):
+    """rows [(key, text, name)]: the same text left in a prompt UNSENT_AFTER is due, once. Text that changes (still
+    being typed) starts the clock again; an empty prompt clears it."""
+    due = []
+    for k, text, name in rows:
+        old = seen.get(k)
+        if not text:
+            seen.pop(k, None)
+        elif old is None or old[0] != text:
+            seen[k] = [text, now, False]
+        elif not old[2] and now - old[1] >= UNSENT_AFTER:
+            old[2] = True
+            due.append(f"{name}: unsent reply: {text[:60]}")
+    return due
+
+
 def nag(ms):
     """Tell you, on this desk, about agents on any machine left waiting on you (station-maintenance fleet 30)."""
-    seen = {}
+    seen, unsent = {}, {}
     while True:
-        ags = []
+        ags, prompts = [], []
         for m in ms:
             try:
                 for a in json.loads(herdr(m, "agent", "list", timeout=4))["result"]["agents"]:
                     name = f"{ms[m][0]} {a.get('terminal_title_stripped') or a['pane_id']}"
                     ags.append(((m, a["pane_id"]), a.get("agent_status"), name))
+                    if a.get("agent_status") in ("idle", "done"):
+                        try:
+                            scr = herdr(m, "agent", "read", a["pane_id"], "--source", "visible", "--ansi", timeout=4)
+                        except (RuntimeError, OSError, subprocess.TimeoutExpired):
+                            scr = ""
+                        prompts.append(((m, a["pane_id"]), typed(scr), name))
             except (RuntimeError, OSError, ValueError, KeyError, subprocess.TimeoutExpired):
                 pass
-        due = nag_due(seen, ags, time.time())
+        now = time.time()
+        due = nag_due(seen, ags, now) + unsent_due(unsent, prompts, now)
         if due:
             try:
                 subprocess.run(["notify-send", "-a", "herdr-queues", "Agents waiting on you (mod+shift+s)", "\n".join(due)],

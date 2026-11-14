@@ -99,6 +99,9 @@ and you haven't looked) for 65 minutes. done waits longer because a `/loop` agen
 most an hour) shows as done too. Each wait is told once; looking at the agent ends it. Agents already waiting when the
 watcher starts are left out. Every desk's watcher notifies on its own screen.
 
+It also reads each idle agent's prompt: a reply typed but never sent (still there, unchanged, after 5 minutes) gets
+its own notification. A dimmed suggested prompt isn't counted.
+
 ## Limits
 
 - X11 only for the machine switch (xdotool). On Wayland the jump can focus the agent but not switch machines.
