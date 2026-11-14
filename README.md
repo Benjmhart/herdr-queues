@@ -74,9 +74,15 @@ this server's own agents still works; on another machine's it does nothing visib
 
 `queues.py standalone` runs the same list outside herdr (bind it to a desktop key); it drives the window itself.
 
+## One set of queues on every machine
+
+Each save also goes down the same request channel, and the watcher keeps the master copy on your desk and writes it
+to every machine, so the popup on any machine opens with the same queues. A watcher only carries out a jump when its
+focused window is a herdr window showing the requesting machine and the screen is not locked, so watchers on other
+desks (locked, or showing something else) stay still. Without a watcher, each machine keeps its own queues.
+
 ## Limits
 
-- Queues (names and who is filed where) are kept per machine.
 - X11 only for the machine switch (xdotool). On Wayland the jump can focus the agent but not switch machines.
 - The summary scrapes the visible screen and is tuned on Claude Code; other agents show their last line.
 

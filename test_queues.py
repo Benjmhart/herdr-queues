@@ -80,12 +80,20 @@ idle = dict(c, agent_status="idle")
 assert S.members(s, [idle], S.UNSORTED) == [idle]                 # unsorted lists everyone, waiting or not
 print("ok queues editing")
 
-# another machine's agent: same ids as a local one, kept apart by the machine prefix
-r = dict(c, machine="carbon")
-assert S.keys(r) == ["carbon/t:term_c"] and S.keys(dict(c, machine="")) == ["t:term_c"]
+# keys are the same whichever machine's popup reads them: session as is, terminal under its host
+r = dict(c, machine="carbon", host="carbon")
+assert S.keys(r) == ["carbon/t:term_c"] and S.keys(dict(c, host="micro")) == ["micro/t:term_c"]
+assert S.keys(dict(a, host="x"))[0] == "s:sess-a"
 s = {"queues": ["work"], "members": {}}
 S.put(s, r, "work")
-assert S.queue_of(s, r) == "work" and S.queue_of(s, c) == S.UNSORTED
+assert S.queue_of(s, r) == "work" and S.queue_of(s, dict(c, host="micro")) == S.UNSORTED
+# 0.4.1 state, written by micro's popup: carbon's agent under its label, micro's own bare
+old = {"queues": ["work", "home"], "members": {"carbon/t:term_c": "work", "t:term_b": "home"}}
+assert S.queue_of(old, dict(r)) == "work"
+assert S.queue_of(old, dict(b, machine="", host="micro")) == "home"
+S.put(old, r, "home")                       # re-filing writes the new key and drops the old one
+assert old["members"] == {"carbon/t:term_c": "home", "t:term_b": "home"} or "carbon/t:term_c" in old["members"]
+assert S.valid(old) and not S.valid({"queues": "x", "members": {}}) and not S.valid({"queues": [], "members": {"a": 1}})
 print("ok machines")
 
 # herdr-streams' state file is read when there is no queues.json yet

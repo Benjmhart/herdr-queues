@@ -22,6 +22,8 @@ REQUESTS = os.path.join(STATE_DIR, "jump")  # "<host> <pane>" lines, followed by
 REMOTE_REQUESTS = "~/.local/state/herdr/plugins/" + PLUGIN + "/jump"
 HERDR = os.environ.get("HERDR_BIN_PATH", "herdr")
 STANDALONE = "HERDR_PLUGIN_ID" not in os.environ
+HOST = socket.gethostname()
+REMOTE_STATE = "~/.local/state/herdr/plugins/" + PLUGIN + "/queues.json"
 ICON = {"working": "●", "blocked": "!", "done": "✓", "idle": "○"}
 WAITING = ("blocked", "done")
 UNSORTED = "unsorted"
@@ -83,7 +85,7 @@ class Live:
             self.down[m] = time.time()
             return []
         for a in ags:
-            a["machine"] = m
+            a["machine"], a["host"] = m, self.ms[m][0]
             a["workspace"] = self.names.get(m, {}).get(a["workspace_id"], a["workspace_id"])
         return ags
 
@@ -168,16 +170,40 @@ def load():
     return {"queues": ["personal", "work"], "members": {}}
 
 
-def save(state):
+def write(state):
     os.makedirs(STATE_DIR, exist_ok=True)
     with open(STATE + ".tmp", "w") as f:
         json.dump(state, f, indent=1, sort_keys=True)
     os.replace(STATE + ".tmp", STATE)
 
 
+def save(state):
+    """Here, and down the request channel: the watcher on your desk keeps every machine's copy the same."""
+    write(state)
+    request("state", json.dumps(state, separators=(",", ":"), sort_keys=True))
+
+
+def valid(state):
+    return (isinstance(state, dict) and isinstance(state.get("queues"), list) and isinstance(state.get("members"), dict)
+            and all(isinstance(q, str) for q in state["queues"])
+            and all(isinstance(k, str) and isinstance(v, str) for k, v in state["members"].items()))
+
+
 def keys(agent):
-    """Pane ids change on restart, so membership is kept by the agent's session and its terminal (as herdr-folders).
-    Another machine's ids can repeat this one's, so they carry the machine."""
+    """Membership keys, the same whichever machine's popup reads them (the state is shared). Pane ids change on
+    restart, so: the agent's session (globally unique), and its host + terminal (as herdr-folders)."""
+    h = agent.get("host") or HOST
+    k = []
+    if (agent.get("agent_session") or {}).get("value"):
+        k.append("s:" + agent["agent_session"]["value"])
+    if agent.get("terminal_id"):
+        k.append(f"{h}/t:" + agent["terminal_id"])
+    return k or [f"{h}/p:" + agent["pane_id"]]
+
+
+def legacy(agent):
+    """0.3-0.4.1 keys, relative to the server the popup ran on (another machine's carried its label). Read, never
+    written."""
     k = []
     if (agent.get("agent_session") or {}).get("value"):
         k.append("s:" + agent["agent_session"]["value"])
@@ -189,7 +215,7 @@ def keys(agent):
 
 
 def queue_of(state, agent):
-    for k in keys(agent):
+    for k in keys(agent) + legacy(agent):
         q = state["members"].get(k)
         if q in state["queues"]:
             return q
@@ -200,6 +226,8 @@ def put(state, agent, queue):
     # ponytail: members is never pruned; a few bytes per agent ever sorted, prune if the file ever matters.
     if queue and queue != UNSORTED and queue not in state["queues"]:
         state["queues"].append(queue)
+    for k in legacy(agent):
+        state["members"].pop(k, None)
     for k in keys(agent):
         if queue and queue != UNSORTED:
             state["members"][k] = queue
@@ -288,10 +316,11 @@ def jump(machine, pane, ms=None, shown_by=None):
     herdr(machine, "agent", "focus", pane)
 
 
-def request(host, pane):
+def request(*fields):
+    """One line to the watcher: "<host> <pane>" (jump) or "state <json>" (the queues changed)."""
     os.makedirs(STATE_DIR, exist_ok=True)
     with open(REQUESTS, "a") as f:
-        f.write(f"{host} {pane}\n")
+        f.write(" ".join(fields) + "\n")
     try:
         if os.path.getsize(REQUESTS) > 64 * 1024:  # tail -F follows truncation
             open(REQUESTS, "w").close()
@@ -308,6 +337,40 @@ def die_with_parent():
         pass
 
 
+def at_desk(host):
+    """Act only where you are: a watcher runs on every desktop, but only the one whose focused window is a herdr window
+    showing the requesting machine, on an unlocked screen, carries out a jump (keys typed elsewhere could land in a
+    lock screen's password box)."""
+    try:
+        if subprocess.run(["pgrep", "-x", "-u", str(os.getuid()), "xsecurelock|i3lock|slock|swaylock|xlock"],
+                          capture_output=True).returncode == 0:
+            return False
+    except OSError:
+        pass
+    active = x11("getactivewindow").strip()
+    return any(w == active for w, h in herdr_windows({host}))
+
+
+SYNC = threading.Lock()
+
+
+def ssh(target, *args, **kw):
+    return subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", target, *args],
+                          capture_output=True, text=True, timeout=30, **kw)
+
+
+def push(state, ms, skip=None):
+    """The queues to this machine and every other one (except skip, which sent them), in parallel."""
+    text = json.dumps(state, indent=1, sort_keys=True)
+    with SYNC:
+        if skip != "":
+            write(state)
+        sh = f'mkdir -p "$(dirname {REMOTE_STATE})" && cat > {REMOTE_STATE}.tmp && mv {REMOTE_STATE}.tmp {REMOTE_STATE}'
+        targets = [t for lab, (_, t) in ms.items() if t and lab != skip]
+        with ThreadPoolExecutor(max(1, len(targets))) as ex:
+            list(ex.map(lambda t: ssh(t, sh, input=text), targets))
+
+
 def follow(label, ms):
     """One machine's request file, forever: carry out each request in the window showing that machine."""
     shown_by, target = ms[label]
@@ -320,8 +383,16 @@ def follow(label, ms):
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
                              text=True, preexec_fn=die_with_parent)
         for ln in p.stdout:
+            if ln.startswith("state "):
+                try:
+                    state = json.loads(ln[6:])
+                    if valid(state):
+                        push(state, ms, skip=label)
+                except (ValueError, OSError, subprocess.TimeoutExpired):
+                    pass
+                continue
             f = ln.split()
-            if len(f) == 2 and f[0] in by_host and PANE.match(f[1]):
+            if len(f) == 2 and f[0] in by_host and PANE.match(f[1]) and at_desk(shown_by):
                 try:
                     jump(by_host[f[0]], f[1], ms, shown_by)
                 except (RuntimeError, OSError, subprocess.TimeoutExpired, KeyError):
@@ -339,6 +410,8 @@ def watch():
     except OSError:
         sys.exit("herdr-queues: a watcher is already running")
     ms = machines()
+    if os.path.exists(STATE):  # this desk's queues are the master copy: every machine starts from them
+        threading.Thread(target=push, args=(load(), ms, ""), daemon=True).start()
     for label in ms:
         threading.Thread(target=follow, args=(label, ms), daemon=True).start()
     while True:
@@ -446,7 +519,7 @@ def go(agent, ms):
         subprocess.Popen([sys.executable, os.path.abspath(__file__), "jump", agent["machine"], agent["pane_id"]],
                          start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return None
-    request(ms[agent["machine"]][0], agent["pane_id"])  # `queues.py watch` on your desk carries it out
+    request(agent["host"], agent["pane_id"])  # `queues.py watch` on your desk carries it out
     return None
 
 
