@@ -6,42 +6,113 @@ a shows every agent in the stream (not only the ones waiting). `open` opens the 
 
 Waiting = blocked (it asked you something) or done (it finished and wants a look). The summary is the agent's own
 `※ recap:` line when Claude Code printed one, else the last question on its screen, else its last line of output.
-Streams are kept per herdr server: a plugin cannot switch the client to another machine (herdr #5904, not planned).
+Every machine in `herdr machine list` is shown; a jump to another machine drives the window's Goto picker (see README).
 """
-import curses, json, os, socket, subprocess, sys
+import curses, json, os, socket, subprocess, sys, time
+from concurrent.futures import ThreadPoolExecutor
 
-STATE = os.path.join(os.environ.get("HERDR_PLUGIN_STATE_DIR", "."), "streams.json")
+# Outside herdr (the desktop hotkey) it shares the plugin's state on this machine.
+STATE = os.path.join(os.environ.get("HERDR_PLUGIN_STATE_DIR") or os.path.join(
+    os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "herdr/plugins/benjmhart.streams"),
+    "streams.json")
+STANDALONE = "HERDR_PLUGIN_ID" not in os.environ
 HERDR = os.environ.get("HERDR_BIN_PATH", "herdr")
 ICON = {"working": "●", "blocked": "!", "done": "✓", "idle": "○"}
 WAITING = ("blocked", "done")
 UNSORTED = "unsorted"
 
 
-# --- herdr ------------------------------------------------------------------------------------------------------
+# --- herdr: this server plus every machine it knows (`herdr machine list`) ---------------------------------------
 
-def call(method, params):
-    with socket.socket(socket.AF_UNIX) as s:
-        s.connect(os.environ["HERDR_SOCKET_PATH"])
-        s.sendall((json.dumps({"id": "streams", "method": method, "params": params}) + "\n").encode())
-        resp = json.loads(s.makefile().readline())
-    if "error" in resp:
-        raise RuntimeError(f"{method}: {resp['error']}")
-    return resp["result"]
+def herdr(machine, *args, timeout=5):
+    cmd = [HERDR] + (["--machine", machine] if machine else []) + list(args)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    if r.returncode:
+        raise RuntimeError(f"{' '.join(cmd[1:])}: {r.stderr.strip() or r.stdout.strip()}")
+    return r.stdout
 
 
-def agents():
-    return call("agent.list", {})["agents"]
+def machines():
+    """{label: host} of the enabled machines; "" is this server."""
+    out = {"": socket.gethostname()}
+    try:
+        for ln in herdr(None, "machine", "list").splitlines():
+            f = ln.split("\t")
+            if len(f) >= 5 and f[4] == "enabled":
+                out[f[1]] = f[2].split("@")[-1].split(".")[0]
+    except (RuntimeError, OSError, subprocess.TimeoutExpired):
+        pass
+    return out
 
 
-def labels():
-    return {w["workspace_id"]: w.get("label") or w["workspace_id"] for w in call("workspace.list", {})["workspaces"]}
+DOWN = {}  # machine -> when it last failed; skipped for a minute so one offline box doesn't stall the popup
 
 
-def screen(pane_id):
+def fetch(machine):
+    if time.time() - DOWN.get(machine, 0) < 60:
+        return []
+    try:
+        ags = json.loads(herdr(machine, "agent", "list", timeout=3))["result"]["agents"]
+        ws = json.loads(herdr(machine, "workspace", "list", timeout=3))["result"]["workspaces"]
+    except (RuntimeError, OSError, ValueError, KeyError, subprocess.TimeoutExpired):
+        DOWN[machine] = time.time()
+        return []
+    names = {w["workspace_id"]: w.get("label") or w["workspace_id"] for w in ws}
+    for a in ags:
+        a["machine"], a["workspace"] = machine, names.get(a["workspace_id"], a["workspace_id"])
+    return ags
+
+
+def agents(ms):
+    """Every agent on every machine, fetched in parallel (about half a second per remote call)."""
+    with ThreadPoolExecutor(len(ms)) as ex:
+        return [a for part in ex.map(fetch, ms) for a in part]
+
+
+def screen(agent):
     # visible: instant, and the only source herdr serves while an agent is blocked (recent needs it idle).
-    r = subprocess.run([HERDR, "agent", "read", pane_id, "--source", "visible"],
-                       capture_output=True, text=True, timeout=5)
-    return r.stdout if r.returncode == 0 else ""
+    try:
+        return herdr(agent["machine"], "agent", "read", agent["pane_id"], "--source", "visible")
+    except (RuntimeError, OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+# --- jumping: a plugin can't switch the window's machine (herdr #5904), so drive the window's Goto picker -------------
+
+def herdr_window(hosts):
+    """(window id, host it shows) of a herdr window: title "[herdr: ]<hostname>: <workspace>". X11 via xdotool."""
+    env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY") or ":0")
+    try:
+        active = subprocess.run(["xdotool", "getactivewindow"], capture_output=True, text=True, env=env).stdout.split()
+        ids = subprocess.run(["xdotool", "search", "--name", ": "], capture_output=True, text=True, env=env).stdout.split()
+    except OSError:
+        return None, None
+    for w in active + ids:
+        t = subprocess.run(["xdotool", "getwindowname", w], capture_output=True, text=True, env=env).stdout
+        h = t.removeprefix("herdr: ").split(": ", 1)[0]
+        if h in hosts:
+            return w, h
+    return None, None
+
+
+def jump(machine, pane):
+    """Run detached after the popup closed: switch the herdr window to the machine, then focus the pane."""
+    env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY") or ":0")
+    ms = machines()
+    win, shown = herdr_window(set(ms.values()))
+    if win and shown != ms.get(machine):
+        x = lambda *a: subprocess.run(["xdotool", *a], env=env, capture_output=True)
+        x("windowactivate", "--sync", win)
+        x("windowfocus", "--sync", win)  # input focus too: activate alone leaves it elsewhere without a WM
+        # ctrl+b a: Goto; / search; the machine's label lists its panes and Enter takes the first, which switches.
+        x("key", "--clearmodifiers", "ctrl+b", "a", "slash")
+        x("type", "--delay", "20", machine or "local")
+        x("key", "Return")
+        for _ in range(30):
+            time.sleep(0.1)
+            if herdr_window({ms.get(machine)})[0]:
+                break
+    herdr(machine, "agent", "focus", pane)
 
 
 # --- what an agent needs ------------------------------------------------------------------------------------------
@@ -105,7 +176,9 @@ def keys(agent):
         k.append("s:" + agent["agent_session"]["value"])
     if agent.get("terminal_id"):
         k.append("t:" + agent["terminal_id"])
-    return k or ["p:" + agent["pane_id"]]
+    k = k or ["p:" + agent["pane_id"]]
+    m = agent.get("machine")
+    return [m + "/" + x for x in k] if m else k  # another machine's ids can repeat this one's
 
 
 def stream_of(state, agent):
@@ -196,10 +269,11 @@ def ui(scr):
     curses.use_default_colors()
     scr.timeout(3000)  # pick up status changes
     state, cur, sel, everyone, msg = load(), None, 0, False, ""
+    ms = machines()
     cache = {}  # (pane, status change) -> summary, so the screen is read once per change
 
     while True:
-        live, names = agents(), labels()
+        live = agents(ms)
         streams = tabs(state, live)
         if cur is None:  # open on the first stream with something waiting
             cur = next((i for i, s in enumerate(streams) if queue(state, live, s)), 0)
@@ -224,11 +298,12 @@ def ui(scr):
         for i, a in enumerate(q):
             if row + 1 >= h - 1:
                 break
-            key = (a["pane_id"], a.get("state_change_seq"))
+            key = (a["machine"], a["pane_id"], a.get("state_change_seq"))
             if key not in cache:
-                cache[key] = summary(screen(a["pane_id"])) if a.get("agent_status") in WAITING else ""
+                cache[key] = summary(screen(a)) if a.get("agent_status") in WAITING else ""
             title = a.get("terminal_title_stripped") or os.path.basename(a.get("cwd", ""))
-            head = f"{ICON.get(a.get('agent_status'), '?')} {names.get(a['workspace_id'], a['workspace_id'])}  {title}"
+            where = f"{a['machine']} · {a['workspace']}" if a["machine"] else a["workspace"]
+            head = f"{ICON.get(a.get('agent_status'), '?')} {where}  {title}"
             attr = curses.A_REVERSE if i == sel else 0
             scr.addstr(row, 0, head[:w - 1], attr | curses.A_BOLD)
             if cache[key]:
@@ -257,7 +332,15 @@ def ui(scr):
         elif c == "a":
             everyone = not everyone
         elif c in ("\n", "\r", curses.KEY_ENTER) and q:
-            subprocess.run([HERDR, "agent", "focus", q[sel]["pane_id"]], capture_output=True)
+            a = q[sel]
+            if not a["machine"] and not STANDALONE:  # this server, and the popup's window is showing it
+                herdr(None, "agent", "focus", a["pane_id"])
+                return
+            if not herdr_window(set(ms.values()))[0]:
+                msg = f"can't switch this window to {a['machine']} from here: use mod+shift+s on the desktop"
+                continue
+            subprocess.Popen([sys.executable, __file__, "jump", a["machine"], a["pane_id"]], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return
         elif c == "s" and q:
             name = prompt(scr, f"stream ({', '.join(state['streams'])}; new ok; empty = unsorted): ",
@@ -291,12 +374,21 @@ def ui(scr):
 
 
 def main(cmd):
-    if cmd == "ui":
+    if cmd in ("ui", "standalone"):
         curses.wrapper(ui)
+    elif cmd == "jump":
+        time.sleep(0.3)  # let the popup close first
+        jump(*sys.argv[2:4])
     elif cmd == "open":
-        call("plugin.pane.open", {"plugin_id": os.environ["HERDR_PLUGIN_ID"], "entrypoint": "ui", "focus": True})
+        with socket.socket(socket.AF_UNIX) as sk:  # the socket call 0.1/0.2 used
+            sk.connect(os.environ["HERDR_SOCKET_PATH"])
+            sk.sendall((json.dumps({"id": "streams", "method": "plugin.pane.open", "params": {
+                "plugin_id": os.environ["HERDR_PLUGIN_ID"], "entrypoint": "ui", "focus": True}}) + "\n").encode())
+            resp = json.loads(sk.makefile().readline())
+        if "error" in resp:
+            raise RuntimeError(f"plugin.pane.open: {resp['error']}")
     else:
-        sys.exit("usage: streams.py ui|open")
+        sys.exit("usage: streams.py ui|open|jump <machine> <pane>")
 
 
 if __name__ == "__main__":

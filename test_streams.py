@@ -79,3 +79,11 @@ assert s["streams"] == ["personal", "games"] and S.stream_of(s, a) == S.UNSORTED
 idle = dict(c, agent_status="idle")
 assert S.queue(s, [idle], S.UNSORTED) == [idle]                 # unsorted lists everyone, waiting or not
 print("ok streams editing")
+
+# another machine's agent: same ids as a local one, kept apart by the machine prefix
+r = dict(c, machine="carbon")
+assert S.keys(r) == ["carbon/t:term_c"] and S.keys(dict(c, machine="")) == ["t:term_c"]
+s = {"streams": ["work"], "members": {}}
+S.put(s, r, "work")
+assert S.stream_of(s, r) == "work" and S.stream_of(s, c) == S.UNSORTED
+print("ok machines")
