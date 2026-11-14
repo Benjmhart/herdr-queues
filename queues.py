@@ -287,15 +287,23 @@ def members(state, live, queue, everyone=False):
 # herdr's agent panel (ui.agent_panel_sort = "spaces") follows the workspace order, so it moves too. workspace.move is
 # a socket call the CLI lacks: run here, or over ssh on another machine (not one this one can't reach, e.g. micro).
 
-MOVE = r'''
+CALLS = r'''
 import json, os, socket, sys
 P = os.environ.get("HERDR_SOCKET_PATH") or os.path.expanduser("~/.config/herdr/herdr.sock")
-for i, w in enumerate(json.loads(sys.argv[1])):
+for method, params in json.loads(sys.argv[1]):
     with socket.socket(socket.AF_UNIX) as s:
         s.connect(P)
-        s.sendall((json.dumps({"id": "q", "method": "workspace.move", "params": {"workspace_id": w, "insert_index": i}}) + "\n").encode())
+        s.sendall((json.dumps({"id": "q", "method": method, "params": params}) + "\n").encode())
         s.makefile().readline()
 '''
+
+
+def call(target, reqs):
+    """[method, params] socket requests on one machine's server: here (target None) or over ssh."""
+    arg = json.dumps(reqs)
+    cmd = [sys.executable, "-c", CALLS, arg] if not target else [
+        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", target, "python3 -c " + shlex.quote(CALLS) + " " + shlex.quote(arg)]
+    subprocess.run(cmd, capture_output=True, timeout=20, check=True)
 
 
 def by_queues(state, agents, ids):
@@ -321,10 +329,36 @@ def workspace_ids(label):
 
 
 def apply_order(label, target, order):
-    cmd = [sys.executable, "-c", MOVE, json.dumps(order)] if not target else [
-        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", target,
-        "python3 -c " + shlex.quote(MOVE) + " " + shlex.quote(json.dumps(order))]
-    subprocess.run(cmd, capture_output=True, timeout=20, check=True)
+    call(target, [["workspace.move", {"workspace_id": w, "insert_index": i}] for i, w in enumerate(order)])
+
+
+# --- inactive agents (Ben 2026-11-14: "ability to mark agents inactive, which removes them from the sidebar but keeps
+# them in herdr-queues") -------------------------------------------------------------------------------------------
+# `i` in the popup toggles it. An inactive agent's pane carries the token queues_inactive on its own server, and every
+# server gets an agent view hiding panes with that token: in a saved-machine client the selected server's view applies
+# to the combined list, so a token is the one mark that can't hit another machine's pane of the same id. Views and
+# tokens end with the server, so `queues.py watch` puts them back every minute (and follows a restarted agent's new
+# pane). agent.list and the popup still show everything.
+
+TOKEN = "queues_inactive"
+SOURCE = "user:herdr-queues"
+VIEW = {"source": SOURCE, "filter": {"op": "not", "filter": {"op": "exists", "field": {"token": TOKEN}}}}
+
+
+def inactive(state, agent):
+    return any(k in state.get("inactive", []) for k in keys(agent))
+
+
+def set_inactive(state, agent, on):
+    k = set(state.get("inactive", [])) - set(keys(agent))
+    state["inactive"] = sorted(k | set(keys(agent)) if on else k)
+
+
+def hiding(state, agents):
+    """One machine's requests: each agent's token set or cleared, then the view (cleared when nothing is inactive)."""
+    reqs = [["pane.report_metadata", {"pane_id": a["pane_id"], "source": SOURCE,
+                                      "tokens": {TOKEN: "1" if inactive(state, a) else None}}] for a in agents]
+    return reqs + [["agent.view.set", VIEW] if state.get("inactive") else ["agent.view.clear", {"source": SOURCE}]]
 
 
 def resort(state, agents, ms):
@@ -556,12 +590,23 @@ def unsent_due(seen, rows, now):
 
 def nag(ms):
     """Tell you, on this desk, about agents on any machine left waiting on you (station-maintenance fleet 30)."""
-    seen, unsent = {}, {}
+    seen, unsent, had = {}, {}, True
     while True:
-        ags, prompts = [], []
+        ags, prompts, state = [], [], load()
+        hide, had = bool(state.get("inactive")) or had, bool(state.get("inactive"))  # once more after the last goes
         for m in ms:
             try:
-                for a in json.loads(herdr(m, "agent", "list", timeout=4))["result"]["agents"]:
+                listed = json.loads(herdr(m, "agent", "list", timeout=4))["result"]["agents"]
+                for a in listed:
+                    a["host"] = ms[m][0]
+                try:
+                    if hide:
+                        call(ms[m][1], hiding(state, listed))
+                except (OSError, subprocess.SubprocessError):
+                    pass
+                for a in listed:
+                    if inactive(state, a):  # put aside on purpose: no reminders
+                        continue
                     name = f"{ms[m][0]} {a.get('terminal_title_stripped') or a['pane_id']}"
                     ags.append(((m, a["pane_id"]), a.get("agent_status"), name))
                     if a.get("agent_status") in ("idle", "done"):
@@ -586,7 +631,7 @@ def nag(ms):
 # --- the list ---------------------------------------------------------------------------------------------------
 
 HELP = ("←→/h l/tab queue · ↑↓/j k pgup pgdn g G · enter: go to agent · m: move to queue · 1-9: move to that queue · a: waiting only/all\n"
-        "queues: n new · r rename · d delete · </> reorder · s: sidebar by queues / your order · q quit")
+        "i: inactive (off herdr's sidebar) · queues: n new · r rename · d delete · </> reorder · s: sidebar by queues / your order · q quit")
 ARROWS = {"A": "up", "B": "down", "C": "right", "D": "left"}
 NAMED = {curses.KEY_NPAGE: "pgdn", curses.KEY_PPAGE: "pgup", curses.KEY_HOME: "home", curses.KEY_END: "end",
          curses.KEY_UP: "up", curses.KEY_DOWN: "down", curses.KEY_LEFT: "left", curses.KEY_RIGHT: "right",
@@ -773,6 +818,7 @@ def ui(scr):
                 s = sums.get(skey(a)) if st in WAITING else ""
                 if i + top == sel:  # the selected line: one solid bar
                     line = f" {ICON.get(st, '?')} {(a['machine'] + ' · ') if a['machine'] else ''}{a['workspace']}  {title}"
+                    line += "  · inactive" if inactive(state, a) else ""
                     line += f"  — {s if s is not None else '…'}" if st in WAITING else ""
                     put_str(scr, row, 0, line.ljust(w - 1), C.get("select", curses.A_REVERSE) | curses.A_BOLD)
                     continue
@@ -782,6 +828,8 @@ def ui(scr):
                     x = put_str(scr, row, x, " · ", C.get("help", 0))
                 x = put_str(scr, row, x, a["workspace"], C.get("workspace", 0) | curses.A_BOLD) + 2
                 x = put_str(scr, row, x, title, curses.A_BOLD if st in WAITING else 0)
+                if inactive(state, a):
+                    x = put_str(scr, row, x, "  · inactive", C.get("help", 0))
                 if st in WAITING:
                     put_str(scr, row, x + 2, "— " + (s if s is not None else "…"), C.get("summary", 0))
             if len(q) > rows:  # where you are in a long list
@@ -813,6 +861,16 @@ def ui(scr):
             sel = len(q) - 1
         elif c == "a":
             everyone = not everyone
+        elif c == "i" and q:
+            on = not inactive(state, q[sel])
+            set_inactive(state, q[sel], on)
+            save(state)
+            mine = [a for a in agents if a["machine"] == q[sel]["machine"]]
+            try:
+                call(ms[q[sel]["machine"]][1], hiding(state, mine))
+                msg = ("inactive: hidden from herdr's sidebar" if on else "active: back in herdr's sidebar")
+            except (OSError, subprocess.SubprocessError):
+                msg = "saved; the sidebar follows within a minute (the watcher on your desk applies it)"
         elif c == "s":
             msg = "sorting the sidebar…"
             put_str(scr, scr.getmaxyx()[0] - 1, 0, msg)

@@ -111,3 +111,16 @@ S.put(st, ag[0], "personal"); S.put(st, ag[1], "work"); S.put(st, ag[2], "work")
 assert S.by_queues(st, ag, ["w1", "w2", "w3", "w4", "w5"]) == ["w3", "w1", "w2", "w4", "w5"]
 assert S.restored(["w5", "w1", "w9"], ["w1", "w2", "w5"]) == ["w5", "w1", "w2"]
 print("ok migrate")
+
+# inactive: marked by the agent's keys (survives a pane id change), cleared again; the view is set only while any is
+st = {"queues": ["work"], "members": {}}
+x = {"pane_id": "w1:p1", "terminal_id": "tx", "host": "carbon", "agent_status": "idle"}
+y = {"pane_id": "w1:p1", "terminal_id": "ty", "host": "micro", "agent_status": "done"}  # same pane id, other machine
+S.set_inactive(st, x, True)
+assert S.inactive(st, dict(x, pane_id="w9:p4")) and not S.inactive(st, y)
+r = S.hiding(st, [x, y])
+assert r[0] == ["pane.report_metadata", {"pane_id": "w1:p1", "source": S.SOURCE, "tokens": {S.TOKEN: "1"}}]
+assert r[1][1]["tokens"] == {S.TOKEN: None} and r[2] == ["agent.view.set", S.VIEW]
+S.set_inactive(st, x, False)
+assert st["inactive"] == [] and S.hiding(st, [])[-1] == ["agent.view.clear", {"source": S.SOURCE}]
+print("ok inactive")

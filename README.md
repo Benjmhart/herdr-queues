@@ -61,6 +61,16 @@ own order, saved when you left it; workspaces made since go last. herdr's agent 
 (`ui.agent_panel_sort = "spaces"`, the default), so it reorders too. Another machine is reordered over ssh
 (`workspace.move` is a socket call the CLI lacks), so one this machine cannot ssh to keeps its order.
 
+## Inactive agents: off herdr's sidebar, still here
+
+`i` in the popup marks the selected agent inactive (`i` again undoes it): herdr's sidebar stops listing it, on every
+machine, while the popup keeps it in its queue, marked "· inactive", and the watcher stops notifying about it. It is
+herdr's own agent view (`agent.view.set`, the sidebar header reads "filtered"): the agent's pane carries the token
+`queues_inactive` on its own server, and every server gets a view hiding panes with that token. A token rather than a
+pane id, because a saved-machine client applies the selected server's view to every machine's agents, and pane ids
+repeat across machines. Views and tokens don't survive a herdr restart, so the watcher puts them back once a minute;
+the mark itself is kept by the agent's session and terminal, like queue membership. `herdr agent list` is unchanged.
+
 ## Jumping to another machine: run the watcher where you sit
 
 A plugin can't switch the herdr window to another machine
