@@ -97,16 +97,26 @@ class Live:
 
     def run(self):
         while True:
-            ags = [a for part in self.pool.map(self.fetch, self.ms) for a in part]
-            with self.lock:
-                self.agents, self.loaded = ags, True
-                self.version += 1
-                for a in ags:
-                    k = skey(a)
-                    if a.get("agent_status") in WAITING and k not in self.summary:
-                        self.summary[k] = None  # asked for; read in parallel, shown when it lands
-                        self.reads.submit(self.read, k, a["machine"], a["pane_id"])
+            try:
+                self.round()
+            except Exception as e:  # a refresher that dies leaves the list frozen; log it and go again
+                try:  # not stderr: it would draw over the list
+                    with open(os.path.join(STATE_DIR, "errors.log"), "a") as f:
+                        f.write(f"{time.strftime('%F %T')} refresh: {e!r}\n")
+                except OSError:
+                    pass
             time.sleep(2)
+
+    def round(self):
+        ags = [a for part in self.pool.map(self.fetch, self.ms) for a in part]
+        with self.lock:
+            self.agents, self.loaded = ags, True
+            self.version += 1
+            for a in ags:
+                k = skey(a)
+                if a.get("agent_status") in WAITING and k not in self.summary:
+                    self.summary[k] = None  # asked for; read in parallel, shown when it lands
+                    self.reads.submit(self.read, k, a["machine"], a["pane_id"])
 
     def snapshot(self):
         with self.lock:
