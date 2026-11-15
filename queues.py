@@ -248,12 +248,15 @@ def put(state, agent, queue):
 def rename(state, old, new):
     state["queues"] = [new if x == old else x for x in state["queues"]]
     state["members"] = {k: new if q == old else q for k, q in state["members"].items()}
+    if old in state.get("rank", {}):
+        state["rank"][new] = state["rank"].pop(old)
 
 
 def delete(state, name):
     """Its agents go back to unsorted."""
     state["queues"].remove(name)
     state["members"] = {k: q for k, q in state["members"].items() if q != name}
+    state.get("rank", {}).pop(name, None)
 
 
 def shift(state, name, d):
@@ -272,13 +275,38 @@ def tabs(state, live):
     return t
 
 
+def position(state, queue, agent):
+    """Where you put the agent in the queue (J/K), None if you haven't."""
+    order = state.get("rank", {}).get(queue, [])
+    return min((order.index(k) for k in keys(agent) if k in order), default=None)
+
+
 def members(state, live, queue, everyone=False):
-    """The queue's agents: blocked first, then done, then (with everyone) the rest. Unsorted always lists everyone:
-    it is where agents are filed from."""
+    """The queue's agents: your order first (J/K), then the rest blocked, done, idle, working; inactive ones last
+    (Ben 2026-11-14). Without everyone, only the waiting ones. Unsorted always lists everyone: it is where agents are
+    filed from."""
     rank = {"blocked": 0, "done": 1, "idle": 2, "working": 3}
     everyone = everyone or queue == UNSORTED
     mine = [a for a in live if queue_of(state, a) == queue and (everyone or a.get("agent_status") in WAITING)]
-    return sorted(mine, key=lambda a: (rank.get(a.get("agent_status"), 4), a.get("machine", ""), a.get("workspace", "")))
+
+    def order(a):
+        p = position(state, queue, a)
+        return (inactive(state, a), p is None, p or 0, rank.get(a.get("agent_status"), 4), a.get("machine", ""),
+                a.get("workspace", ""))
+    return sorted(mine, key=order)
+
+
+def move(state, live, queue, agent, d, everyone=True):
+    """J/K: swap the agent with its neighbour below (d=1) or above (d=-1) in the list as shown. The queue's whole
+    order is written out, so agents you never placed keep the place they had. Returns the agent's new index."""
+    shown = members(state, live, queue, everyone)
+    i = next(n for n, a in enumerate(shown) if keys(a) == keys(agent))
+    j = max(0, min(len(shown) - 1, i + d))
+    full = members(state, live, queue, everyone=True)
+    fi, fj = (next(n for n, a in enumerate(full) if keys(a) == keys(shown[x])) for x in (i, j))
+    full[fi], full[fj] = full[fj], full[fi]
+    state.setdefault("rank", {})[queue] = [keys(a)[0] for a in full]
+    return j
 
 
 # --- the sidebar's order (Ben 2026-11-14: "resortable by workspace order", "resortable by herdr-queues order") ----
@@ -644,10 +672,10 @@ def nag(ms, notify=True):
 # --- the list ---------------------------------------------------------------------------------------------------
 
 HELP = ("←→/h l/tab queue · ↑↓/j k pgup pgdn g G · enter: go to agent · m: move to queue · 1-9: move to that queue · a: waiting only/all\n"
-        "i: inactive (off herdr's sidebar) · b: alerts on/off · queues: n new · r rename · d delete · </> reorder · s: sidebar by queues / your order · q quit")
+        "J/K: move down/up in the queue · i: inactive (off herdr's sidebar, sinks to the bottom) · b: alerts on/off\nqueues: n new · r rename · d delete · </> reorder · s: sidebar by queues / your order · q quit")
 # The mouse (Ben 2026-11-14: "clickable buttons and scrolling of the agent list for mouse users"): each button sends its
 # key. Click a tab to open it, a line to select it, the selected line again to go to it; the wheel scrolls.
-BUTTONS = [("go", "enter"), ("move", "m"), ("waiting/all", "a"), ("inactive", "i"), ("alerts", "b"), ("sort", "s"),
+BUTTONS = [("go", "enter"), ("▲", "K"), ("▼", "J"), ("move", "m"), ("waiting/all", "a"), ("inactive", "i"), ("alerts", "b"), ("sort", "s"),
            ("new", "n"), ("rename", "r"), ("delete", "d"), ("<", "<"), (">", ">"), ("quit", "q")]
 WHEEL_UP = getattr(curses, "BUTTON4_PRESSED", 0)
 WHEEL_DOWN = getattr(curses, "BUTTON5_PRESSED", 0x200000)  # ncurses 6; older Pythons lack the name
@@ -839,7 +867,8 @@ def ui(scr):
         q = members(state, agents, qs[cur or 0], everyone)
         sel = max(0, min(sel, len(q) - 1))
         h, w = scr.getmaxyx()
-        rows = max(1, h - 5)  # tabs, two help lines, a blank, the list, the message line
+        hl = len(HELP.splitlines())
+        rows = max(1, h - hl - 3)  # tabs, the help lines, the buttons, the list, the message line
         top = min(max(top, sel - rows + 1), sel, max(0, len(q) - rows))  # keep the selection in view
         top = max(0, top)
         if drawn != (version, cur, sel, everyone, msg, len(state["queues"]), top, h, w):
@@ -856,15 +885,15 @@ def ui(scr):
                 put_str(scr, 1 + i, 0, ln, C.get("help", 0))
             x = 0
             for label, k in BUTTONS:
-                hits.append((3, x, x + len(label) + 2, ("key", k)))
-                x = put_str(scr, 3, x, f"[{label}]", C.get("machine", 0)) + 1
+                hits.append((1 + hl, x, x + len(label) + 2, ("key", k)))
+                x = put_str(scr, 1 + hl, x, f"[{label}]", C.get("machine", 0)) + 1
             if not live.loaded:
-                put_str(scr, 4, 2, f"loading {len(ms)} machines…", C.get("help", 0))
+                put_str(scr, 2 + hl, 2, f"loading {len(ms)} machines…", C.get("help", 0))
             elif not q:
-                put_str(scr, 4, 2, "no agents in this queue (m on an agent in another queue moves it here)" if everyone
+                put_str(scr, 2 + hl, 2, "no agents in this queue (m on an agent in another queue moves it here)" if everyone
                         else "nothing waiting on you here (a: show all its agents)")
             for i, a in enumerate(q[top:top + rows]):
-                row, st = 4 + i, a.get("agent_status")
+                row, st = 2 + hl + i, a.get("agent_status")
                 hits.append((row, 0, w, ("row", top + i)))
                 title = a.get("terminal_title_stripped") or os.path.basename(a.get("cwd", ""))
                 s = sums.get(skey(a)) if st in WAITING else ""
@@ -929,7 +958,7 @@ def ui(scr):
         elif c in ("up", "k"):
             sel -= 1
         elif c in ("pgdn", "pgup"):
-            sel += (1 if c == "pgdn" else -1) * max(1, scr.getmaxyx()[0] - 6)
+            sel += (1 if c == "pgdn" else -1) * rows
         elif c in ("home", "g"):
             sel = 0
         elif c in ("end", "G"):
@@ -946,6 +975,9 @@ def ui(scr):
                 msg = ("inactive: hidden from herdr's sidebar" if on else "active: back in herdr's sidebar")
             except (OSError, subprocess.SubprocessError):
                 msg = "saved; the sidebar follows within a minute (the watcher on your desk applies it)"
+        elif c in ("J", "K") and q:
+            sel = move(state, agents, qs[cur], q[sel], 1 if c == "J" else -1, everyone)
+            save(state)
         elif c == "b" and q:
             on = not quiet(state, q[sel])
             set_quiet(state, q[sel], on)

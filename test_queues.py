@@ -132,3 +132,30 @@ assert S.quiet(q, dict(a, pane_id="w9:p1"))           # follows the session, lik
 S.set_quiet(q, a, False)
 assert not S.quiet(q, a) and q["quiet"] == []
 print("ok quiet")
+
+# order within a queue (J/K), inactive last
+x = {"pane_id": "p1", "terminal_id": "tx", "agent_status": "working"}
+y = {"pane_id": "p2", "terminal_id": "ty", "agent_status": "blocked"}
+z = {"pane_id": "p3", "terminal_id": "tz", "agent_status": "done"}
+o = {"queues": ["w"], "members": {}}
+for g in (x, y, z):
+    S.put(o, g, "w")
+L = [x, y, z]
+assert S.members(o, L, "w", True) == [y, z, x]                 # by status until you order them
+S.set_inactive(o, y, True)
+assert S.members(o, L, "w", True) == [z, x, y]                 # inactive sinks
+S.set_inactive(o, y, False)
+assert S.move(o, L, "w", x, -1) == 1                           # x up past z
+assert S.members(o, L, "w", True) == [y, x, z]
+y["agent_status"] = "working"                                  # status no longer reorders a placed queue
+assert S.members(o, L, "w", True) == [y, x, z]
+S.set_inactive(o, y, True)
+assert S.members(o, L, "w", True) == [x, z, y]                 # inactive still sinks below your order
+S.set_inactive(o, y, False)
+# waiting-only view: z (done) moves up past y? y is working now, so only z waits; move is a no-op there
+assert S.move(o, L, "w", z, -1, everyone=False) == 0
+S.rename(o, "w", "v")
+assert S.members(o, L, "v", True) == [y, x, z] and "w" not in o["rank"]
+S.delete(o, "v")
+assert "v" not in o["rank"]
+print("ok order")

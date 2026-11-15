@@ -20,7 +20,8 @@ queues: n new · r rename · d delete · </> reorder · q quit
 ```
 
 - **A queue lists all its agents**, the waiting ones first: blocked (`!`, it asked you something), then done (`✓`, it
-  finished). The number on a tab counts the waiting ones. `a` narrows the list to the waiting ones.
+  finished). **Your own order:** `J` / `K` (or the ▲ ▼ buttons) move the selected agent down or up, and from then on
+  the queue keeps your order; agents you never placed follow it, by status. Inactive agents sit at the bottom. The number on a tab counts the waiting ones. `a` narrows the list to the waiting ones.
 - **The summary** is the agent's own `※ recap:` line when Claude Code printed one, else the question on its screen
   (a permission prompt is named by its tool and description), else its last line of output.
 - **Every machine**: the server you are on plus every enabled machine in `herdr machine list`. Agents on this
@@ -31,7 +32,7 @@ queues: n new · r rename · d delete · </> reorder · q quit
   wait on the network.
 - **Filing agents**: every agent starts in `unsorted`, which always lists all of them. `m` opens a list of the
   other queues (or a new one) to move the selected agent into; `1`-`9` moves it straight to that queue.
-- **The mouse**: a row of buttons under the help (go, move, waiting/all, inactive, alerts, sort, new, rename, delete,
+- **The mouse**: a row of buttons under the help (go, ▲, ▼, move, waiting/all, inactive, alerts, sort, new, rename, delete,
   `<` `>`, quit) does what its key does. Click a tab to open it, a line to select it, the selected line again to go
   to it; the wheel scrolls the list. In the move box, click a queue (outside the box cancels).
 - **Your own queues**: `n` new, `r` rename, `d` delete (its agents go back to unsorted), `<` / `>` reorder.
