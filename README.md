@@ -31,6 +31,9 @@ queues: n new · r rename · d delete · </> reorder · q quit
   wait on the network.
 - **Filing agents**: every agent starts in `unsorted`, which always lists all of them. `m` opens a list of the
   other queues (or a new one) to move the selected agent into; `1`-`9` moves it straight to that queue.
+- **The mouse**: a row of buttons under the help (go, move, waiting/all, inactive, alerts, sort, new, rename, delete,
+  `<` `>`, quit) does what its key does. Click a tab to open it, a line to select it, the selected line again to go
+  to it; the wheel scrolls the list. In the move box, click a queue (outside the box cancels).
 - **Your own queues**: `n` new, `r` rename, `d` delete (its agents go back to unsorted), `<` / `>` reorder.
   Membership follows the agent's session, so it survives a herdr restart.
 
@@ -108,6 +111,10 @@ has waited on you too long: **blocked** (it asked a permission or a question) fo
 and you haven't looked) for 65 minutes. done waits longer because a `/loop` agent sleeping until its next wakeup (at
 most an hour) shows as done too. Each wait is told once; looking at the agent ends it. Agents already waiting when the
 watcher starts are left out. Every desk's watcher notifies on its own screen.
+
+`b` in the popup (or the **alerts** button) turns notifications off for the selected agent, and on again; it shows
+"· no alerts" and is kept by the agent's session, like inactive. To turn them off on a desk altogether, start the
+watcher with `watch --no-notify` (it still keeps the inactive marks up).
 
 It also reads each idle agent's prompt: a reply typed but never sent (still there, unchanged, after 5 minutes) gets
 its own notification. A dimmed suggested prompt isn't counted.

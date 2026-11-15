@@ -354,6 +354,18 @@ def set_inactive(state, agent, on):
     state["inactive"] = sorted(k | set(keys(agent)) if on else k)
 
 
+# Alerts, per agent (Ben 2026-11-14: "easy to add or remove notifications for a given agent the same as we mark them
+# inactive"): `b` in the popup turns the watcher's notifications off for the selected agent, kept by its keys.
+
+def quiet(state, agent):
+    return any(k in state.get("quiet", []) for k in keys(agent))
+
+
+def set_quiet(state, agent, on):
+    k = set(state.get("quiet", [])) - set(keys(agent))
+    state["quiet"] = sorted(k | set(keys(agent)) if on else k)
+
+
 def hiding(state, agents):
     """One machine's requests: each agent's token set or cleared, then the view (cleared when nothing is inactive)."""
     reqs = [["pane.report_metadata", {"pane_id": a["pane_id"], "source": SOURCE,
@@ -514,7 +526,7 @@ def follow(label, ms):
         time.sleep(10)  # machine down or rebooting: try again
 
 
-def watch():
+def watch(notify=True):
     import fcntl
     os.makedirs(STATE_DIR, exist_ok=True)
     lock = open(os.path.join(STATE_DIR, "watch.lock"), "w")
@@ -527,7 +539,7 @@ def watch():
         threading.Thread(target=push, args=(load(), ms, ""), daemon=True).start()
     for label in ms:
         threading.Thread(target=follow, args=(label, ms), daemon=True).start()
-    threading.Thread(target=nag, args=(ms,), daemon=True).start()
+    threading.Thread(target=nag, args=(ms, notify), daemon=True).start()
     while True:
         time.sleep(3600)
 
@@ -588,8 +600,9 @@ def unsent_due(seen, rows, now):
     return due
 
 
-def nag(ms):
-    """Tell you, on this desk, about agents on any machine left waiting on you (station-maintenance fleet 30)."""
+def nag(ms, notify=True):
+    """Tell you, on this desk, about agents on any machine left waiting on you (station-maintenance fleet 30). With
+    notify False (watch --no-notify) only the inactive marks are kept up."""
     seen, unsent, had = {}, {}, True
     while True:
         ags, prompts, state = [], [], load()
@@ -605,7 +618,7 @@ def nag(ms):
                 except (OSError, subprocess.SubprocessError):
                     pass
                 for a in listed:
-                    if inactive(state, a):  # put aside on purpose: no reminders
+                    if not notify or inactive(state, a) or quiet(state, a):  # put aside on purpose: no reminders
                         continue
                     name = f"{ms[m][0]} {a.get('terminal_title_stripped') or a['pane_id']}"
                     ags.append(((m, a["pane_id"]), a.get("agent_status"), name))
@@ -631,7 +644,13 @@ def nag(ms):
 # --- the list ---------------------------------------------------------------------------------------------------
 
 HELP = ("←→/h l/tab queue · ↑↓/j k pgup pgdn g G · enter: go to agent · m: move to queue · 1-9: move to that queue · a: waiting only/all\n"
-        "i: inactive (off herdr's sidebar) · queues: n new · r rename · d delete · </> reorder · s: sidebar by queues / your order · q quit")
+        "i: inactive (off herdr's sidebar) · b: alerts on/off · queues: n new · r rename · d delete · </> reorder · s: sidebar by queues / your order · q quit")
+# The mouse (Ben 2026-11-14: "clickable buttons and scrolling of the agent list for mouse users"): each button sends its
+# key. Click a tab to open it, a line to select it, the selected line again to go to it; the wheel scrolls.
+BUTTONS = [("go", "enter"), ("move", "m"), ("waiting/all", "a"), ("inactive", "i"), ("alerts", "b"), ("sort", "s"),
+           ("new", "n"), ("rename", "r"), ("delete", "d"), ("<", "<"), (">", ">"), ("quit", "q")]
+WHEEL_UP = getattr(curses, "BUTTON4_PRESSED", 0)
+WHEEL_DOWN = getattr(curses, "BUTTON5_PRESSED", 0x200000)  # ncurses 6; older Pythons lack the name
 ARROWS = {"A": "up", "B": "down", "C": "right", "D": "left"}
 NAMED = {curses.KEY_NPAGE: "pgdn", curses.KEY_PPAGE: "pgup", curses.KEY_HOME: "home", curses.KEY_END: "end",
          curses.KEY_UP: "up", curses.KEY_DOWN: "down", curses.KEY_LEFT: "left", curses.KEY_RIGHT: "right",
@@ -645,6 +664,12 @@ def key(scr):
         c = scr.get_wch()
     except curses.error:
         return None
+    if c == curses.KEY_MOUSE:
+        try:
+            _, x, y, _, b = curses.getmouse()
+        except curses.error:
+            return None
+        return ("mouse", x, y, b)
     if c in NAMED:
         return NAMED[c]
     if c in ("\n", "\r"):
@@ -665,6 +690,11 @@ def key(scr):
         finally:
             scr.nodelay(False)
             scr.timeout(250)
+        m = re.fullmatch(r"\[<(\d+);(\d+);(\d+)([Mm])", seq)  # SGR mouse, for a terminfo without kmous
+        if m:
+            b = int(m[1]) if m[4] == "M" else -1  # a release: nothing to do
+            return ("mouse", int(m[2]) - 1, int(m[3]) - 1,
+                    WHEEL_UP if b == 64 else WHEEL_DOWN if b == 65 else curses.BUTTON1_PRESSED if b == 0 else 0)
         if seq[:1] in ("[", "O"):
             return {"5~": "pgup", "6~": "pgdn", "H": "home", "F": "end", "1~": "home", "4~": "end"}.get(
                 seq[1:], ARROWS.get(seq[-1:], "esc"))
@@ -712,6 +742,19 @@ def choose(scr, title, options):
             win.addstr(2 + i, 2, f"{i + 1 if i < 9 else ' '} {o}"[:bw - 4], curses.A_REVERSE if i == sel else 0)
         win.refresh()
         c = key(win)
+        if isinstance(c, tuple):  # a click on an option picks it; outside the box cancels; the wheel moves
+            _, x, y, b = c
+            if b & WHEEL_UP:
+                c = "up"
+            elif b & WHEEL_DOWN:
+                c = "down"
+            elif b & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED):
+                if not win.enclose(y, x):
+                    return None
+                i = y - win.getbegyx()[0] - 2
+                if 0 <= i < min(len(options), bh - 4):
+                    return i
+                continue
         if c in ("up", "k"):
             sel = (sel - 1) % len(options)
         elif c in ("down", "j"):
@@ -777,6 +820,9 @@ def ui(scr):
     curses.curs_set(0)
     colours()
     scr.timeout(250)
+    curses.mousemask(curses.ALL_MOUSE_EVENTS)  # no motion reports: clicks and the wheel only
+    curses.mouseinterval(0)  # presses at once, no waiting to tell a click from a double click
+    hits = []  # (y, x0, x1, what) of the last draw: ("tab", i), ("row", i), ("key", k)
     ms = machines()
     live = Live(ms)
     # Every agent in the queue, waiting ones first (Ben 2026-11-14: a queue is worked through, so all of it shows);
@@ -799,14 +845,19 @@ def ui(scr):
         if drawn != (version, cur, sel, everyone, msg, len(state["queues"]), top, h, w):
             drawn = (version, cur, sel, everyone, msg, len(state["queues"]), top, h, w)
             scr.erase()
-            x = 0
+            hits, x = [], 0
             for i, s in enumerate(qs):
                 n = len(members(state, agents, s))
                 t = f" {s} {n} " if n else f" {s} "
+                hits.append((0, x, x + len(t), ("tab", i)))
                 x = put_str(scr, 0, x, t, (C.get("tab", curses.A_REVERSE) if i == (cur or 0) else 0)
                             | (curses.A_BOLD if n else 0)) + 1
             for i, ln in enumerate(HELP.splitlines()):
                 put_str(scr, 1 + i, 0, ln, C.get("help", 0))
+            x = 0
+            for label, k in BUTTONS:
+                hits.append((3, x, x + len(label) + 2, ("key", k)))
+                x = put_str(scr, 3, x, f"[{label}]", C.get("machine", 0)) + 1
             if not live.loaded:
                 put_str(scr, 4, 2, f"loading {len(ms)} machines…", C.get("help", 0))
             elif not q:
@@ -814,11 +865,13 @@ def ui(scr):
                         else "nothing waiting on you here (a: show all its agents)")
             for i, a in enumerate(q[top:top + rows]):
                 row, st = 4 + i, a.get("agent_status")
+                hits.append((row, 0, w, ("row", top + i)))
                 title = a.get("terminal_title_stripped") or os.path.basename(a.get("cwd", ""))
                 s = sums.get(skey(a)) if st in WAITING else ""
                 if i + top == sel:  # the selected line: one solid bar
                     line = f" {ICON.get(st, '?')} {(a['machine'] + ' · ') if a['machine'] else ''}{a['workspace']}  {title}"
                     line += "  · inactive" if inactive(state, a) else ""
+                    line += "  · no alerts" if quiet(state, a) else ""
                     line += f"  — {s if s is not None else '…'}" if st in WAITING else ""
                     put_str(scr, row, 0, line.ljust(w - 1), C.get("select", curses.A_REVERSE) | curses.A_BOLD)
                     continue
@@ -830,6 +883,8 @@ def ui(scr):
                 x = put_str(scr, row, x, title, curses.A_BOLD if st in WAITING else 0)
                 if inactive(state, a):
                     x = put_str(scr, row, x, "  · inactive", C.get("help", 0))
+                if quiet(state, a):
+                    x = put_str(scr, row, x, "  · no alerts", C.get("help", 0))
                 if st in WAITING:
                     put_str(scr, row, x + 2, "— " + (s if s is not None else "…"), C.get("summary", 0))
             if len(q) > rows:  # where you are in a long list
@@ -840,6 +895,26 @@ def ui(scr):
             scr.refresh()
 
         c = key(scr)
+        if isinstance(c, tuple):  # the mouse: turned into the key it stands for
+            _, mx, my, b = c
+            what = next((t for y, x0, x1, t in hits if y == my and x0 <= mx < x1), None)
+            if b & WHEEL_UP:
+                c = "up"
+            elif b & WHEEL_DOWN:
+                c = "down"
+            elif not b & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED) or what is None:
+                continue
+            elif what[0] == "key":
+                c = what[1]
+            elif what[0] == "tab":
+                cur, sel, c = what[1], 0, None
+            elif what[1] == sel:  # the selected line again: go there
+                c = "enter"
+            else:
+                sel, c = what[1], None
+            if c is None:
+                drawn = None
+                continue
         if c is None:
             continue
         msg, cur = "", cur or 0
@@ -871,6 +946,11 @@ def ui(scr):
                 msg = ("inactive: hidden from herdr's sidebar" if on else "active: back in herdr's sidebar")
             except (OSError, subprocess.SubprocessError):
                 msg = "saved; the sidebar follows within a minute (the watcher on your desk applies it)"
+        elif c == "b" and q:
+            on = not quiet(state, q[sel])
+            set_quiet(state, q[sel], on)
+            save(state)
+            msg = "alerts off for this agent" if on else "alerts on for this agent"
         elif c == "s":
             msg = "sorting the sidebar…"
             put_str(scr, scr.getmaxyx()[0] - 1, 0, msg)
@@ -928,7 +1008,7 @@ def main(cmd):
         time.sleep(0.3)  # let the list close first
         jump(*sys.argv[2:4])
     elif cmd == "watch":
-        watch()
+        watch(notify="--no-notify" not in sys.argv[2:])
     elif cmd == "open":
         with socket.socket(socket.AF_UNIX) as sk:
             sk.connect(os.environ["HERDR_SOCKET_PATH"])

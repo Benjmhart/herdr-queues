@@ -124,3 +124,11 @@ assert r[1][1]["tokens"] == {S.TOKEN: None} and r[2] == ["agent.view.set", S.VIE
 S.set_inactive(st, x, False)
 assert st["inactive"] == [] and S.hiding(st, [])[-1] == ["agent.view.clear", {"source": S.SOURCE}]
 print("ok inactive")
+
+q = {"queues": ["work"], "members": {}}
+S.set_quiet(q, a, True)
+assert S.quiet(q, a) and not S.quiet(q, b)
+assert S.quiet(q, dict(a, pane_id="w9:p1"))           # follows the session, like inactive
+S.set_quiet(q, a, False)
+assert not S.quiet(q, a) and q["quiet"] == []
+print("ok quiet")
