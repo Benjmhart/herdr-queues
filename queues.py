@@ -7,6 +7,7 @@ each with one line of what it needs. Enter jumps to the agent, switching the her
   queues.py standalone   the same list outside herdr (a desktop key); jumps directly
   queues.py watch        run on the machine you sit at: carries out jumps asked for by a popup on any machine
   queues.py jump M P     switch the herdr window to machine M and focus pane P
+  queues.py icon Q [E]   icon E for queue Q in herdr's sidebar ($queues_queue); no E clears it
 
 Standard library only. Data loads in a background thread, so keys never wait on the network.
 """
@@ -435,10 +436,21 @@ def set_quiet(state, agent, on):
     state["quiet"] = sorted(k | set(keys(agent)) if on else k)
 
 
+# Sidebar token (Ben 2026-11-15: "alert status - queue name - workspace name - machine name"). Every agent's pane
+# carries its queue (queues_queue), as the queue's icon when it has one, for herdr's [ui.sidebar.agents] rows as
+# "$queues_queue". herdr cuts a narrow row at its end, so a one-character icon leaves the width to the workspace name
+# (Ben: "i'm good with queue emojis to save space"). `queues.py icon QUEUE EMOJI` sets one. The machine's icon is
+# another plugin's job (herdr-machine-icons, "$machine_icon").
+def icon(state, name):
+    return state.get("icons", {}).get(name, name)
+
+
 def hiding(state, agents):
-    """One machine's requests: each agent's token set or cleared, then the view (cleared when nothing is inactive)."""
-    reqs = [["pane.report_metadata", {"pane_id": a["pane_id"], "source": SOURCE,
-                                      "tokens": {TOKEN: "1" if inactive(state, a) else None}}] for a in agents]
+    """One machine's requests: each agent's tokens (inactive, queue), then the view (cleared when nothing is inactive)."""
+    def tokens(a):
+        q = queue_of(state, a)
+        return {TOKEN: "1" if inactive(state, a) else None, "queues_queue": None if q == UNSORTED else icon(state, q)}
+    reqs = [["pane.report_metadata", {"pane_id": a["pane_id"], "source": SOURCE, "tokens": tokens(a)}] for a in agents]
     return reqs + [["agent.view.set", VIEW] if state.get("inactive") else ["agent.view.clear", {"source": SOURCE}]]
 
 
@@ -726,18 +738,16 @@ def unsent_due(seen, rows, now):
 def nag(ms, notify=True):
     """Tell you, on this desk, about agents on any machine left waiting on you (station-maintenance fleet 30). With
     notify False (watch --no-notify) only the inactive marks are kept up."""
-    seen, unsent, had = {}, {}, True
+    seen, unsent = {}, {}
     while True:
         ags, prompts, state = [], [], load()
-        hide, had = bool(state.get("inactive")) or had, bool(state.get("inactive"))  # once more after the last goes
         for m in ms:
             try:
                 listed = json.loads(herdr(m, "agent", "list", timeout=4))["result"]["agents"]
                 for a in listed:
                     a["host"] = ms[m][0]
                 try:
-                    if hide:
-                        call(ms[m][1], hiding(state, listed))
+                    call(ms[m][1], hiding(state, listed))
                 except (OSError, subprocess.SubprocessError):
                     pass
                 for a in listed:
@@ -778,6 +788,21 @@ ARROWS = {"A": "up", "B": "down", "C": "right", "D": "left"}
 NAMED = {curses.KEY_NPAGE: "pgdn", curses.KEY_PPAGE: "pgup", curses.KEY_HOME: "home", curses.KEY_END: "end",
          curses.KEY_UP: "up", curses.KEY_DOWN: "down", curses.KEY_LEFT: "left", curses.KEY_RIGHT: "right",
          curses.KEY_ENTER: "enter", curses.KEY_BTAB: "left", curses.KEY_BACKSPACE: "backspace"}
+
+
+LATER = "saved; the sidebar follows within a minute (the watcher on your desk applies it)"
+
+
+def retoken(state, agents, agent, ms):
+    """The sidebar tokens of the agent's machine, now. False when only its watcher can (relayed, or unreachable)."""
+    m = agent["machine"]
+    if m not in ms:  # relayed (micro): only its own watcher reaches its server
+        return False
+    try:
+        call(ms[m][1], hiding(state, [a for a in agents if a["machine"] == m]))
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def key(scr):
@@ -1071,14 +1096,8 @@ def ui(scr):
             on = not inactive(state, q[sel])
             set_inactive(state, q[sel], on)
             save(state)
-            mine = [a for a in agents if a["machine"] == q[sel]["machine"]]
-            try:
-                if q[sel]["machine"] not in ms:  # relayed (micro): only its own watcher reaches its server
-                    raise OSError
-                call(ms[q[sel]["machine"]][1], hiding(state, mine))
-                msg = ("inactive: hidden from herdr's sidebar" if on else "active: back in herdr's sidebar")
-            except (OSError, subprocess.SubprocessError):
-                msg = "saved; the sidebar follows within a minute (the watcher on your desk applies it)"
+            msg = (("inactive: hidden from herdr's sidebar" if on else "active: back in herdr's sidebar")
+                   if retoken(state, agents, q[sel], ms) else LATER)
         elif c in ("J", "K") and q:
             sel = move(state, agents, qs[cur], q[sel], 1 if c == "J" else -1, everyone)
             save(state)
@@ -1106,13 +1125,13 @@ def ui(scr):
                 if name:
                     put(state, q[sel], name)
                     save(state)
-                    msg = f"moved to {name}"
+                    msg = f"moved to {name}" if retoken(state, agents, q[sel], ms) else LATER
             drawn = None
         elif isinstance(c, str) and c in "123456789" and q and int(c) <= len(state["queues"]):
             name = state["queues"][int(c) - 1]
             put(state, q[sel], name)
             save(state)
-            msg = f"moved to {name}"
+            msg = f"moved to {name}" if retoken(state, agents, q[sel], ms) else LATER
         elif c == "n":
             name = prompt(scr, "new queue: ")
             if name and name != UNSORTED and name not in state["queues"]:
@@ -1143,6 +1162,16 @@ def main(cmd):
     elif cmd == "jump":
         time.sleep(0.3)  # let the list close first
         jump(*sys.argv[2:4])
+    elif cmd == "icon":  # queues.py icon QUEUE [EMOJI]: a queue's sidebar icon; no EMOJI clears it
+        if len(sys.argv) < 3:
+            sys.exit("usage: queues.py icon QUEUE [EMOJI]")
+        state, name = load(), sys.argv[2]
+        if len(sys.argv) > 3:
+            state.setdefault("icons", {})[name] = sys.argv[3]
+        else:
+            state.get("icons", {}).pop(name, None)
+        save(state)
+        print(json.dumps(state.get("icons", {}), ensure_ascii=False))
     elif cmd == "watch":
         watch(notify="--no-notify" not in sys.argv[2:])
     elif cmd == "open":

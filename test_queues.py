@@ -119,8 +119,14 @@ y = {"pane_id": "w1:p1", "terminal_id": "ty", "host": "micro", "agent_status": "
 S.set_inactive(st, x, True)
 assert S.inactive(st, dict(x, pane_id="w9:p4")) and not S.inactive(st, y)
 r = S.hiding(st, [x, y])
-assert r[0] == ["pane.report_metadata", {"pane_id": "w1:p1", "source": S.SOURCE, "tokens": {S.TOKEN: "1"}}]
-assert r[1][1]["tokens"] == {S.TOKEN: None} and r[2] == ["agent.view.set", S.VIEW]
+assert r[0] == ["pane.report_metadata", {"pane_id": "w1:p1", "source": S.SOURCE,
+                "tokens": {S.TOKEN: "1", "queues_queue": None}}]
+assert r[1][1]["tokens"][S.TOKEN] is None and r[2] == ["agent.view.set", S.VIEW]
+# sidebar token: the queue, as its icon when it has one (2026-11-15)
+S.put(st, y, "work"); st["icons"] = {"work": "W"}
+assert S.hiding(st, [y])[0][1]["tokens"] == {S.TOKEN: None, "queues_queue": "W"}
+del st["icons"]
+assert S.hiding(st, [y])[0][1]["tokens"]["queues_queue"] == "work"
 S.set_inactive(st, x, False)
 assert st["inactive"] == [] and S.hiding(st, [])[-1] == ["agent.view.clear", {"source": S.SOURCE}]
 print("ok inactive")

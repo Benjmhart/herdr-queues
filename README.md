@@ -109,6 +109,23 @@ Every copy carries the time it was saved, and no machine's copy is ever replaced
 up, or a popup left open while you sorted somewhere else, used to overwrite newer queues and your J/K order. An open
 popup also re-reads the queues when another machine changes them.
 
+## The queue in herdr's sidebar
+
+Each agent's pane carries its queue as a token, `$queues_queue`, for herdr's agent rows: the queue's icon when it has
+one, else its name (nothing while unsorted). An icon is one character, so a narrow sidebar keeps its width for the
+workspace name (herdr cuts a row at its end):
+
+```toml
+[ui.sidebar.agents]
+rows = [["state_icon", "$queues_queue", "workspace", "machine", "tab"]]
+```
+
+    python3 queues.py icon priority 🔥     # set; synced to every machine like the queues
+    python3 queues.py icon priority        # clear: the name shows again
+
+The watcher keeps the tokens up on every machine it reaches (once a minute); a move in the popup updates them at once.
+herdr's agent list has no section headers, so the icon is the queue's mark.
+
 ## A machine nothing can reach
 
 A machine others can't ssh into (an outbound-only box) still shows up in every popup: its watcher sends its agents,
