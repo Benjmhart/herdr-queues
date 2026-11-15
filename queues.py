@@ -24,6 +24,7 @@ HERDR = os.environ.get("HERDR_BIN_PATH", "herdr")
 STANDALONE = "HERDR_PLUGIN_ID" not in os.environ
 HOST = socket.gethostname()
 REMOTE_STATE = "~/.local/state/herdr/plugins/" + PLUGIN + "/queues.json"
+RELAY = os.path.join(STATE_DIR, "relay")  # <host>.json: agents of a machine this one can't reach (micro), sent by it
 ICON = {"working": "●", "blocked": "!", "done": "✓", "idle": "○"}
 WAITING = ("blocked", "done")
 UNSORTED = "unsorted"
@@ -108,19 +109,43 @@ class Live:
             time.sleep(2)
 
     def round(self):
-        ags = [a for part in self.pool.map(self.fetch, self.ms) for a in part]
+        ags = [a for part in self.pool.map(self.fetch, self.ms) for a in part] + relayed(self.ms)
         with self.lock:
             self.agents, self.loaded = ags, True
             self.version += 1
             for a in ags:
                 k = skey(a)
-                if a.get("agent_status") in WAITING and k not in self.summary:
+                if "summary" in a:  # relayed: read on its own machine
+                    self.summary[k] = a["summary"]
+                elif a.get("agent_status") in WAITING and k not in self.summary:
                     self.summary[k] = None  # asked for; read in parallel, shown when it lands
                     self.reads.submit(self.read, k, a["machine"], a["pane_id"])
 
     def snapshot(self):
         with self.lock:
             return list(self.agents), dict(self.summary), self.version
+
+
+def relayed(ms):
+    """Agents of machines this server can't reach that sent their list here (fresh in the last minute): micro is
+    outbound-only, so only its own watcher can tell the others what runs there (Ben 2026-11-15)."""
+    known, out = {h for h, _ in ms.values()}, []
+    try:
+        names = os.listdir(RELAY)
+    except OSError:
+        return out
+    for n in names:
+        p = os.path.join(RELAY, n)
+        try:
+            if n[:-5] in known or not n.endswith(".json") or time.time() - os.path.getmtime(p) > 60:
+                continue
+            with open(p) as f:
+                for a in json.load(f):
+                    a["machine"] = a["host"] = n[:-5]
+                    out.append(a)
+        except (OSError, ValueError, TypeError, KeyError):
+            continue
+    return out
 
 
 def skey(a):
@@ -180,15 +205,31 @@ def load():
     return {"queues": ["personal", "work"], "members": {}}
 
 
+# Every copy carries the time it was saved, and no copy is replaced by an older one (Ben 2026-11-15: J/K order lost).
+# Without it the last writer won: a watcher starting pushes its own copy to every machine, and the four fpush restarted
+# together went out in a race; a popup left open saved what it read when it opened.
+KEEP_NEWEST = r'''
+import json, os, sys
+p = os.path.expanduser(sys.argv[1]); new = sys.stdin.read()
+try:
+    old = json.load(open(p)).get("saved", 0)
+except (OSError, ValueError, AttributeError):
+    old = 0
+if json.loads(new).get("saved", 0) >= old:
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    open(p + ".tmp", "w").write(new)
+    os.replace(p + ".tmp", p)
+'''
+
+
 def write(state):
-    os.makedirs(STATE_DIR, exist_ok=True)
-    with open(STATE + ".tmp", "w") as f:
-        json.dump(state, f, indent=1, sort_keys=True)
-    os.replace(STATE + ".tmp", STATE)
+    subprocess.run([sys.executable, "-c", KEEP_NEWEST, STATE], input=json.dumps(state, indent=1, sort_keys=True),
+                   text=True, timeout=10)
 
 
 def save(state):
     """Here, and down the request channel: the watcher on your desk keeps every machine's copy the same."""
+    state["saved"] = time.time()
     write(state)
     request("state", json.dumps(state, separators=(",", ":"), sort_keys=True))
 
@@ -518,7 +559,7 @@ def push(state, ms, skip=None):
     with SYNC:
         if skip != "":
             write(state)
-        sh = f'mkdir -p "$(dirname {REMOTE_STATE})" && cat > {REMOTE_STATE}.tmp && mv {REMOTE_STATE}.tmp {REMOTE_STATE}'
+        sh = "python3 -c " + shlex.quote(KEEP_NEWEST) + " " + shlex.quote(REMOTE_STATE)
         targets = [t for lab, (_, t) in ms.items() if t and lab != skip]
         with ThreadPoolExecutor(max(1, len(targets))) as ex:
             list(ex.map(lambda t: ssh(t, sh, input=text), targets))
@@ -554,6 +595,59 @@ def follow(label, ms):
         time.sleep(10)  # machine down or rebooting: try again
 
 
+RELAY_SINK = r'''
+import json, os, re, sys
+d = os.path.expanduser("~/.local/state/herdr/plugins/benjmhart.queues/relay")
+os.makedirs(d, exist_ok=True)
+for ln in sys.stdin:
+    m = json.loads(ln)
+    if re.fullmatch(r"[\w.-]{1,64}", m["host"]):
+        p = os.path.join(d, m["host"] + ".json")
+        open(p + ".tmp", "w").write(json.dumps(m["agents"]))
+        os.replace(p + ".tmp", p)
+'''
+
+
+def relay(ms):
+    """This server's agents, with what the waiting ones need, to every other machine over one ssh each, when they
+    change and every 20 s. A popup there shows them only if it can't reach this machine itself (micro)."""
+    # ponytail: sent to every machine, needed only by those that can't reach this one; a few KB a change.
+    pipes, started, cache, last, sent = {}, {}, {}, None, 0
+    while True:
+        try:
+            ags = json.loads(herdr(None, "agent", "list", timeout=4))["result"]["agents"]
+            ws = json.loads(herdr(None, "workspace", "list", timeout=4))["result"]["workspaces"]
+            names = {w["workspace_id"]: w.get("label") or w["workspace_id"] for w in ws}
+            seen = {}
+            for a in ags:
+                a["workspace"] = names.get(a["workspace_id"], a["workspace_id"])
+                if a.get("agent_status") in WAITING:
+                    k = (a["pane_id"], a.get("state_change_seq"))
+                    seen[k] = cache[k] if k in cache else " ".join(summary(screen(None, a["pane_id"])).split())
+                    a["summary"] = seen[k]
+            cache, body = seen, json.dumps(ags, sort_keys=True)
+        except (RuntimeError, OSError, ValueError, KeyError, subprocess.TimeoutExpired):
+            body = None
+        if body and (body != last or time.time() - sent > 20):
+            line = json.dumps({"host": HOST, "agents": ags}) + "\n"
+            for t in (t for _, t in ms.values() if t):
+                p = pipes.get(t)
+                if (p is None or p.poll() is not None) and time.time() - started.get(t, 0) > 60:
+                    started[t] = time.time()
+                    p = pipes[t] = subprocess.Popen(
+                        ["ssh", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ConnectTimeout=10", t,
+                         "python3 -u -c " + shlex.quote(RELAY_SINK)], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL, text=True, preexec_fn=die_with_parent)
+                try:
+                    if p and p.poll() is None:
+                        p.stdin.write(line)
+                        p.stdin.flush()
+                except OSError:
+                    pass
+            last, sent = body, time.time()
+        time.sleep(3)
+
+
 def watch(notify=True):
     import fcntl
     os.makedirs(STATE_DIR, exist_ok=True)
@@ -567,6 +661,7 @@ def watch(notify=True):
         threading.Thread(target=push, args=(load(), ms, ""), daemon=True).start()
     for label in ms:
         threading.Thread(target=follow, args=(label, ms), daemon=True).start()
+    threading.Thread(target=relay, args=(ms,), daemon=True).start()
     threading.Thread(target=nag, args=(ms, notify), daemon=True).start()
     while True:
         time.sleep(3600)
@@ -857,7 +952,14 @@ def ui(scr):
     # `a` narrows it to the ones waiting on you. The number on a tab counts the waiting ones.
     state, cur, sel, everyone, msg, drawn, top = load(), None, 0, True, "", None, 0
 
+    seen = None
     while True:
+        try:  # saved elsewhere (another popup, another machine): read it, so a change here never saves an old copy
+            m = os.stat(STATE).st_mtime
+        except OSError:
+            m = None
+        if m != seen:
+            state, seen, drawn = (load() if seen is not None else state), m, None
         agents, sums, version = live.snapshot()
         qs = tabs(state, agents)
         if cur is None and live.loaded:  # open on the first queue with something waiting
@@ -971,6 +1073,8 @@ def ui(scr):
             save(state)
             mine = [a for a in agents if a["machine"] == q[sel]["machine"]]
             try:
+                if q[sel]["machine"] not in ms:  # relayed (micro): only its own watcher reaches its server
+                    raise OSError
                 call(ms[q[sel]["machine"]][1], hiding(state, mine))
                 msg = ("inactive: hidden from herdr's sidebar" if on else "active: back in herdr's sidebar")
             except (OSError, subprocess.SubprocessError):

@@ -97,7 +97,7 @@ assert S.valid(old) and not S.valid({"queues": "x", "members": {}}) and not S.va
 print("ok machines")
 
 # herdr-streams' state file is read when there is no queues.json yet
-import json, os, tempfile
+import json, os, subprocess, sys, tempfile
 d = tempfile.mkdtemp()
 S.STATE, S.OLD_STATE = os.path.join(d, "queues.json"), os.path.join(d, "streams.json")
 json.dump({"streams": ["home"], "members": {"t:x": "home"}}, open(S.OLD_STATE, "w"))
@@ -159,3 +159,26 @@ assert S.members(o, L, "v", True) == [y, x, z] and "w" not in o["rank"]
 S.delete(o, "v")
 assert "v" not in o["rank"]
 print("ok order")
+
+# newest copy wins: a stale copy (a watcher starting, a popup left open) never replaces a newer one (2026-11-15)
+S.write({"queues": ["a"], "members": {}, "saved": 200.0})
+S.write({"queues": ["stale"], "members": {}, "saved": 100.0})
+assert S.load()["queues"] == ["a"]
+S.write({"queues": ["b"], "members": {}, "saved": 300.0})
+assert S.load()["queues"] == ["b"]
+r = subprocess.run([sys.executable, "-c", S.KEEP_NEWEST, S.STATE], input='{"queues": ["old"], "members": {}}', text=True)
+assert r.returncode == 0 and S.load()["queues"] == ["b"]  # no stamp = oldest
+print("ok newest")
+
+# relayed agents: a machine this one can't reach (micro) sent its list; shown unless reachable, or older than a minute
+S.RELAY = os.path.join(d, "relay"); os.makedirs(S.RELAY)
+json.dump([{"pane_id": "w1:p1", "agent_status": "done", "summary": "hi"}], open(os.path.join(S.RELAY, "micro.json"), "w"))
+json.dump([{"pane_id": "w1:p1"}], open(os.path.join(S.RELAY, "carbon.json"), "w"))
+json.dump([{"pane_id": "w1:p1"}], open(os.path.join(S.RELAY, "old.json"), "w"))
+os.utime(os.path.join(S.RELAY, "old.json"), (0, 0))
+got = S.relayed({"": ("beast-arch", None), "carbon": ("carbon", "carbon")})
+assert [(a["host"], a["machine"], a["summary"]) for a in got] == [("micro", "micro", "hi")]
+sink = subprocess.run([sys.executable, "-c", S.RELAY_SINK], input='{"host": "../x", "agents": []}\n', text=True,
+                      env=dict(os.environ, HOME=d), capture_output=True)
+assert not os.path.exists(os.path.join(d, ".local/state/herdr/plugins/x.json"))  # a host name can't climb out
+print("ok relay")

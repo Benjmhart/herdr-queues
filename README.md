@@ -105,6 +105,17 @@ to every machine, so the popup on any machine opens with the same queues. A watc
 focused window is a herdr window showing the requesting machine and the screen is not locked, so watchers on other
 desks (locked, or showing something else) stay still. Without a watcher, each machine keeps its own queues.
 
+Every copy carries the time it was saved, and no machine's copy is ever replaced by an older one: a watcher starting
+up, or a popup left open while you sorted somewhere else, used to overwrite newer queues and your J/K order. An open
+popup also re-reads the queues when another machine changes them.
+
+## A machine nothing can reach
+
+A machine others can't ssh into (an outbound-only box) still shows up in every popup: its watcher sends its agents,
+with what the waiting ones need, to every other machine every few seconds while they change. A popup uses that list
+only for a machine it can't reach itself, and only while it is under a minute old. Enter on one asks that machine's
+watcher to jump, as for any other.
+
 ## Agents left waiting: a notification
 
 The watcher also checks every machine's agents once a minute and sends a desktop notification (`notify-send`) when one
