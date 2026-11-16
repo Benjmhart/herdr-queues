@@ -92,8 +92,20 @@ Start the watcher with your desktop session, e.g. in xmonad's startup hook or i3
 python3 "$(ls -dt ~/.config/herdr/plugins/github-installations/benjmhart.queues-*/*/checkout/queues.py | head -1)" watch
 ```
 
-It needs `xdotool` on X11, or `swaymsg` and `wtype` on sway (found even when the watcher has no `SWAYSOCK`), the Goto picker on `prefix+a` with `prefix` = ctrl+b, and herdr's window
-title in its default shape, `{hostname}: {workspace}` (a `herdr: ` prefix is fine). Without a watcher, Enter on
+It drives the window with what your desktop offers (found even when the watcher lacks the session's environment):
+
+| Desktop | Find and focus the window | Keys |
+|---|---|---|
+| X11 (any window manager) | `xdotool` | `xdotool` |
+| sway | `swaymsg` | `wtype` |
+| Hyprland | `hyprctl` | `wtype` |
+| KDE Plasma (Wayland) | `kdotool` | `ydotool` (+ `ydotoold` running) |
+| GNOME (Wayland) | the [Window Calls](https://extensions.gnome.org/extension/4724/window-calls/) extension | `ydotool` (+ `ydotoold` running) |
+
+The keys that open Goto come from your herdr `config.toml` (`[keys] prefix` and `goto`, herdr's defaults when unset).
+Return is pressed only when the focused pane is seen not to have received the typed machine name: if Goto didn't
+open, the keys went to that pane, and the line is cleared (ctrl+u) instead of run. The window title must keep its
+default shape, `{hostname}: {workspace}` (a `herdr: ` prefix is fine). Without a watcher, Enter on
 this server's own agents still works; on another machine's it does nothing visible.
 
 `queues.py standalone` runs the same list outside herdr (bind it to a desktop key); it drives the window itself.
@@ -268,8 +280,10 @@ its own notification. A dimmed suggested prompt isn't counted.
 
 ## Limits
 
-- The machine switch works on X11 (xdotool) and sway (swaymsg + wtype). On other Wayland compositors (GNOME, KDE,
-  Hyprland) the jump can focus the agent but not switch machines.
+- The machine switch is tested on X11 and sway (headless). Hyprland, KDE and GNOME are written to their tools' documented
+  commands but not yet run on those desktops.
+- The Goto guard reads the pane, not herdr's own dialogs: if another herdr dialog is open (the first-run setup on a fresh
+  config), the keys go there and Return is still pressed.
 - The summary scrapes the visible screen and is tuned on Claude Code; other agents show their last line.
 
 ## Upgrading from herdr-streams

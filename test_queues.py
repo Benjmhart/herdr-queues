@@ -86,3 +86,27 @@ assert not q.asks_text("Pushed `abc123`.\n\nThe tests pass and the run finished.
 # auto order (Ben 2026-11-16): blocked, unseen done, working, idle; a seen done is idle
 assert q.NEED["blocked"] < q.NEED["done"] < q.NEED["working"] < q.NEED["idle"] == q.NEED["done_seen"] == q.NEED["asks_seen"]
 print("ok")
+
+# The Goto guard (0.29.0): Return only when the label did not land in the pane.
+assert not q.typed_into_pane("micro", "$ ls\n", "$ ls\n")
+assert q.typed_into_pane("micro", "$ ls\n", "$ ls\n$ a/micro")
+assert q.typed_into_pane("micro", None, "x") and q.typed_into_pane("micro", "x", None)
+# Key names per tool.
+sent = []
+q.tool, real_tool = (lambda *c, env=None: sent.append(c) or ""), q.tool
+q.press("gnome", "ctrl+b", "Return", "shift+g")
+q.press("sway", "ctrl+u")
+assert sent == [("ydotool", "key", "29:1", "48:1", "48:0", "29:0"), ("ydotool", "key", "28:1", "28:0"), ("ydotool", "key", "42:1", "34:1", "34:0", "42:0"),
+                ("wtype", "-M", "ctrl", "-k", "u", "-m", "ctrl")], sent
+q.tool = real_tool
+print("ok")
+import os, tempfile
+with tempfile.TemporaryDirectory() as t:
+    os.environ["XDG_CONFIG_HOME"] = t
+    assert q.goto_keys() == ["ctrl+b", "g"]  # no config: herdr's defaults
+    os.makedirs(f"{t}/herdr")
+    open(f"{t}/herdr/config.toml", "w").write('[keys]\nprefix = "ctrl+a"\ngoto = ["prefix+a", "prefix+g"]\n')
+    assert q.goto_keys() == ["ctrl+a", "a"]
+    open(f"{t}/herdr/config.toml", "w").write('[keys\n')
+    assert q.goto_keys() is None
+print("ok")

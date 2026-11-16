@@ -1094,21 +1094,14 @@ def resort(state, agents, ms):
 # request to its own REQUESTS file, and `queues.py watch` on the machine you sit at follows that file on every
 # machine (over ssh, as herdr itself reaches them) and drives the window that is showing the requesting machine.
 
-def x11(*args):
-    env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY") or ":0")
-    try:
-        return subprocess.run(["xdotool", *args], capture_output=True, text=True, env=env, timeout=5).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
+RUN = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
 
 
-def sway_socket():
-    """sway's IPC socket when sway is running, else None (X11). The watcher is started by herdr and may not have
-    SWAYSOCK, so the runtime dir is searched too (as x11() falls back to :0)."""
-    run = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-    found = sorted(glob.glob(os.path.join(run, f"sway-ipc.{os.getuid()}.*.sock")), key=os.path.getmtime, reverse=True)
-    for s in [os.environ.get("SWAYSOCK")] + found:
-        try:  # a crashed sway leaves its socket: only a live one counts, or an X session would take the sway path
+def live(*paths):
+    """The first socket with a live listener: a crashed compositor leaves its socket behind, and the watcher (started
+    by herdr) may lack the session's environment, so the runtime dir is searched too."""
+    for s in paths:
+        try:
             with socket.socket(socket.AF_UNIX) as c:
                 c.connect(s)
             return s
@@ -1117,59 +1110,199 @@ def sway_socket():
     return None
 
 
-def sway(*args):
+def newest(pattern):
+    return sorted(glob.glob(os.path.join(RUN, pattern)), key=os.path.getmtime, reverse=True)
+
+
+def sway_socket():
+    return live(os.environ.get("SWAYSOCK"), *newest(f"sway-ipc.{os.getuid()}.*.sock"))
+
+
+def hypr_sig():
+    sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+    s = live(sig and os.path.join(RUN, "hypr", sig, ".socket.sock"), *newest("hypr/*/.socket.sock"))
+    return s and os.path.basename(os.path.dirname(s))
+
+
+def running(name):
     try:
-        return subprocess.run(["swaymsg", "-s", sway_socket(), *args], capture_output=True, text=True,
-                              timeout=5).stdout
-    except (OSError, TypeError, subprocess.TimeoutExpired):
+        return subprocess.run(["pgrep", "-x", "-u", str(os.getuid()), name], capture_output=True).returncode == 0
+    except OSError:
+        return False
+
+
+def desktop():
+    """sway, hyprland, kde, gnome (Wayland sessions) or x11. KWin and GNOME Shell only count with a Wayland socket:
+    on X11 they are driven like any X11 window manager."""
+    if sway_socket():
+        return "sway"
+    if hypr_sig():
+        return "hyprland"
+    wayland = os.environ.get("WAYLAND_DISPLAY") or any(not p.endswith(".lock") for p in glob.glob(f"{RUN}/wayland-*"))
+    if wayland and running("kwin_wayland"):
+        return "kde"
+    if wayland and running("gnome-shell"):
+        return "gnome"
+    return "x11"
+
+
+def tool(*cmd, env=None):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
         return ""
 
 
-def wtype(*args):
-    """Keys into the focused Wayland window (the virtual-keyboard protocol: sway and other wlroots compositors)."""
+def x11(*args, prog="xdotool"):
+    """xdotool, or kdotool (the same commands, for KWin on Wayland)."""
+    return tool(prog, *args, env=dict(os.environ, DISPLAY=os.environ.get("DISPLAY") or ":0"))
+
+
+def sway(*args):
+    return tool("swaymsg", "-s", sway_socket() or "", *args)
+
+
+def hyprctl(*args):
+    return tool("hyprctl", *args, env=dict(os.environ, HYPRLAND_INSTANCE_SIGNATURE=hypr_sig() or ""))
+
+
+def gnome(method, *args):
+    """The Window Calls extension (extensions.gnome.org/extension/4724): GNOME Shell lets nothing else list or focus
+    windows on Wayland."""
+    out = tool("gdbus", "call", "--session", "--dest", "org.gnome.Shell", "--object-path",
+               "/org/gnome/Shell/Extensions/Windows", "--method", f"org.gnome.Shell.Extensions.Windows.{method}", *args)
+    m = re.match(r"\('(.*)',\)\s*$", out, re.S)  # ('<json>',)
+    return m.group(1) if m else ""
+
+
+def wayland_env():
     env = dict(os.environ)
     if not env.get("WAYLAND_DISPLAY"):
-        run = env.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-        found = [p for p in glob.glob(os.path.join(run, "wayland-*")) if not p.endswith(".lock")]
+        found = [p for p in glob.glob(f"{RUN}/wayland-*") if not p.endswith(".lock")]
         env["WAYLAND_DISPLAY"] = os.path.basename(found[0]) if found else "wayland-1"
+    return env
+
+
+# Key names the jump sends, per tool. wtype: the virtual-keyboard protocol (sway, Hyprland and other wlroots
+# compositors); ydotool: a uinput keyboard (any desktop; KWin and GNOME refuse virtual keyboards), needs ydotoold.
+YDO = {"ctrl": 29, "shift": 42, "alt": 56, "slash": 53, "Return": 28,
+       **{c: n for row, start in (("qwertyuiop", 16), ("asdfghjkl", 30), ("zxcvbnm", 44)) for n, c in enumerate(row, start)}}
+
+
+def press(d, *names):
+    """Press keys: "ctrl+b", "shift+g", "slash", "Return"."""
+    if d == "x11":
+        x11("key", "--clearmodifiers", *names)
+        return
+    for n in names:
+        *mods, k = n.split("+")
+        if d in ("sway", "hyprland"):
+            tool("wtype", *[a for m in mods for a in ("-M", m)], "-k", k, *[a for m in mods for a in ("-m", m)],
+                 env=wayland_env())
+        else:
+            codes = [YDO[x] for x in (*mods, k)]
+            tool("ydotool", "key", *[f"{c}:1" for c in codes], *[f"{c}:0" for c in reversed(codes)])
+
+
+def goto_keys():
+    """The keys that open Goto in the herdr client on this desk (its own config.toml, which also serves --remote
+    windows), e.g. ["ctrl+b", "a"]; None when that can't be known. herdr's default is prefix+g; prefix+a is Ben's, and
+    by default it is nothing while prefix+s is settings, where blind keys moved about (headless sway, 2026-11-16)."""
     try:
-        subprocess.run(["wtype", *args], capture_output=True, env=env, timeout=5)
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-
-
-def windows():
-    """[(window id, title, focused)], the focused one first: sway's tree, or X11's through xdotool."""
-    if sway_socket():
+        import tomllib
+        cfg = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "herdr", "config.toml")
         try:
+            with open(cfg, "rb") as f:
+                k = tomllib.load(f).get("keys", {})
+        except FileNotFoundError:
+            k = {}
+        goto = k.get("goto", "prefix+g")
+        goto = goto if isinstance(goto, list) else [goto]
+        g = next(g for g in goto if g)
+        return [k.get("prefix", "ctrl+b"), g.removeprefix("prefix+")] if g.startswith("prefix+") else [g]
+    except (ImportError, ValueError, StopIteration, AttributeError, TypeError):  # tomllib: Python 3.11+
+        return None
+
+
+def type_text(d, text):
+    if d == "x11":
+        x11("type", "--delay", "8", text)
+    elif d in ("sway", "hyprland"):
+        tool("wtype", "-d", "8", text, env=wayland_env())
+    else:
+        tool("ydotool", "type", "--key-delay", "8", text)
+
+
+def windows(d=None):
+    """[(window id, title, focused)], the focused one first."""
+    d = d or desktop()
+    out = []
+    try:
+        if d == "sway":
             todo = [json.loads(sway("-t", "get_tree", "-r"))]
-        except ValueError:
-            return []
-        out = []
-        while todo:
-            n = todo.pop()
-            kids = n.get("nodes", []) + n.get("floating_nodes", [])
-            todo += kids
-            if not kids and n.get("type") in ("con", "floating_con") and n.get("name"):
-                out.append((str(n["id"]), n["name"], bool(n.get("focused"))))
-        return sorted(out, key=lambda x: not x[2])
-    active = x11("getactivewindow").strip()
-    ids = dict.fromkeys(active.split() + x11("search", "--name", ": ").split())
-    return [(w, x11("getwindowname", w).strip(), w == active) for w in ids]
+            while todo:
+                n = todo.pop()
+                kids = n.get("nodes", []) + n.get("floating_nodes", [])
+                todo += kids
+                if not kids and n.get("type") in ("con", "floating_con") and n.get("name"):
+                    out.append((str(n["id"]), n["name"], bool(n.get("focused"))))
+        elif d == "hyprland":
+            out = [(c["address"], c.get("title", ""), c.get("focusHistoryID") == 0) for c in json.loads(hyprctl("-j", "clients"))]
+        elif d == "gnome":
+            for w in json.loads(gnome("List") or "[]"):
+                title = w.get("title") or gnome("GetTitle", str(w["id"]))  # older Window Calls list no titles
+                out.append((str(w["id"]), title, bool(w.get("focus"))))
+        else:
+            prog = "kdotool" if d == "kde" else "xdotool"
+            active = x11("getactivewindow", prog=prog).strip()
+            ids = dict.fromkeys(active.split() + x11("search", "--name", ": ", prog=prog).split())
+            out = [(w, x11("getwindowname", w, prog=prog).strip(), w == active) for w in ids]
+    except (ValueError, KeyError, TypeError):
+        return []
+    return sorted(out, key=lambda x: not x[2])
 
 
-def herdr_windows(hosts):
+def focus(d, w):
+    if d == "sway":
+        sway(f"[con_id={w}] focus")
+    elif d == "hyprland":
+        hyprctl("dispatch", "focuswindow", f"address:{w}")
+    elif d == "gnome":
+        gnome("Activate", w)
+    elif d == "kde":
+        x11("windowactivate", w, prog="kdotool")
+    else:
+        x11("windowactivate", "--sync", w)
+        x11("windowfocus", "--sync", w)  # input focus too: activate alone leaves it elsewhere without a WM
+
+
+def herdr_windows(hosts, d=None):
     """[(window id, host it shows)] of herdr windows, the active one first. Title: "[herdr: ]<hostname>: <workspace>"."""
     out = []
-    for w, title, _ in windows():
+    for w, title, _ in windows(d):
         h = title.removeprefix("herdr: ").split(": ", 1)[0]
         if h in hosts:
             out.append((w, h))
     return out
 
 
-def window_title(w):
-    return next((t for i, t, _ in windows() if i == w), "")
+def window_title(w, d=None):
+    return next((t for i, t, _ in windows(d) if i == w), "")
+
+
+def focused_screen(machine):
+    """The visible text of the focused pane on a server, None when it can't be read."""
+    try:
+        panes = json.loads(herdr(machine, "pane", "list"))["result"]["panes"]
+        pane = next(p["pane_id"] for p in panes if p.get("focused"))
+        return herdr(machine, "pane", "read", pane, "--source", "visible")
+    except (RuntimeError, OSError, subprocess.TimeoutExpired, ValueError, KeyError, StopIteration):
+        return None
+
+
+def typed_into_pane(word, before, after):
+    """Did the keys meant for Goto land in the pane (Goto didn't open)? Unreadable counts as yes: Return is withheld."""
+    return before is None or after is None or after.count(word) > before.count(word)
 
 
 def jump(machine, pane, ms=None, shown_by=None):
@@ -1178,24 +1311,28 @@ def jump(machine, pane, ms=None, shown_by=None):
     ms = ms or machines()
     hosts = {h for h, _ in ms.values()}
     target = ms[machine][0]
-    wins = herdr_windows(hosts)
+    d = desktop()
+    wins = herdr_windows(hosts, d)
     win = next((w for w in wins if w[1] == shown_by), None) or (wins[0] if wins else None)
-    if win and win[1] != target:
-        # ctrl+b a: Goto; / search; the machine's label lists its panes and Enter takes the first, which switches.
-        if sway_socket():
-            sway(f"[con_id={win[0]}] focus")
-            wtype("-M", "ctrl", "-k", "b", "-m", "ctrl", "-k", "a", "-k", "slash")
-            wtype("-d", "8", machine or "local")
-            wtype("-k", "Return")
-        else:
-            x11("windowactivate", "--sync", win[0])
-            x11("windowfocus", "--sync", win[0])  # input focus too: activate alone leaves it elsewhere without a WM
-            x11("key", "--clearmodifiers", "ctrl+b", "a", "slash")
-            x11("type", "--delay", "8", machine or "local")
-            x11("key", "Return")
+    goto = goto_keys()
+    if win and win[1] != target and goto:
+        # prefix+a (or whatever opens Goto): Goto; / search; the machine's label lists its panes and Enter takes the first, which switches.
+        # Return only once the pane the window shows is seen not to have taken the label: if Goto didn't open (another
+        # prefix, keys lost), the keys went to that pane, and Return would run them in a shell or send them to an agent.
+        shown = next((l for l, (h, _) in ms.items() if h == win[1]), None)
+        word = machine or "local"
+        focus(d, win[0])
+        before = focused_screen(shown) if shown is not None else None
+        press(d, *goto, "slash")
+        type_text(d, word)
+        time.sleep(0.3)
+        if typed_into_pane(word, before, focused_screen(shown) if shown is not None else None):
+            press(d, "ctrl+u")  # clears the shell line (or Goto's search); nothing is sent
+            return
+        press(d, "Return")
         for _ in range(30):
             time.sleep(0.1)
-            if window_title(win[0]).removeprefix("herdr: ").startswith(target + ": "):
+            if window_title(win[0], d).removeprefix("herdr: ").startswith(target + ": "):
                 break
     herdr(machine, "agent", "focus", pane)
 
@@ -1221,18 +1358,28 @@ def die_with_parent():
         pass
 
 
+def locked(d):
+    """A lock screen up: a locker process, or GNOME's / KDE's own (no process of their own; asked over D-Bus)."""
+    if any(running(p) for p in ("xsecurelock", "i3lock", "slock", "swaylock", "xlock", "hyprlock")):
+        return True
+    if d == "gnome":
+        q = ("org.gnome.ScreenSaver", "/org/gnome/ScreenSaver", "org.gnome.ScreenSaver.GetActive")
+    elif d == "kde":
+        q = ("org.freedesktop.ScreenSaver", "/ScreenSaver", "org.freedesktop.ScreenSaver.GetActive")
+    else:
+        return False
+    return "true" in tool("gdbus", "call", "--session", "--dest", q[0], "--object-path", q[1], "--method", q[2])
+
+
 def at_desk(host):
     """Act only where you are: a watcher runs on every desktop, but only the one whose focused window is a herdr window
     showing the requesting machine, on an unlocked screen, carries out a jump (keys typed elsewhere could land in a
     lock screen's password box)."""
-    try:
-        if subprocess.run(["pgrep", "-x", "-u", str(os.getuid()), "xsecurelock|i3lock|slock|swaylock|xlock"],
-                          capture_output=True).returncode == 0:
-            return False
-    except OSError:
-        pass
-    focused = next((w for w, _, f in windows() if f), None)
-    return any(w == focused for w, h in herdr_windows({host}))
+    d = desktop()
+    if locked(d):
+        return False
+    focused = next((w for w, _, f in windows(d) if f), None)
+    return any(w == focused for w, h in herdr_windows({host}, d))
 
 
 SYNC = threading.Lock()
