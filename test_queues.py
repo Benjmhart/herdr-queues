@@ -35,4 +35,10 @@ d = tempfile.mkdtemp(); subprocess.run(["git", "-C", d, "init", "-q"])
 assert q.git_of(d) == "clean"; open(d + "/f", "w").write("x"); assert q.git_of(d) == "dirty"; assert q.git_of("/") is None
 st["badges"] = {"gitstatus": {"dirty": "±"}}; assert q.info({"cwd": d}, st)["gitstatus"] == "±"
 a = A("p1", "a", "idle"); a["tokens"]["usage"] = "62"; assert q.label(a, None, "{workspace} {usage_pct}") == "a 62%"
+# heading entries: text, and fake agents filtered
+st2 = {"queues": ["priority"], "icons": {"priority": "🔥"}}
+assert q.heading_text(st2, "priority", 2, False) == "▾ 🔥 priority"
+assert q.heading_text(st2, "priority", 2, True) == "▸ 🔥 priority +2"
+h = A("p9", "h", "idle"); h["tokens"]["queues_heading_for"] = "priority"
+assert q.real([h, A("p1", "a", "idle")]) == [A("p1", "a", "idle")]
 print("ok")

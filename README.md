@@ -153,9 +153,26 @@ same from a shell:
     python3 queues.py colorby machine           # colour rows by queue (default) or by machine
     python3 queues.py mark own                  # status marks drawn by the plugin: indented groups, spinner
     python3 queues.py spinner on                # working agents spin (needs mark own)
+    python3 queues.py entries on                # experimental: clickable headings, entries of their own
 
 A collapsed queue keeps one row: its most urgent agent (blocked, then finished), under `▸ name +N`. herdr's sidebar
-doesn't pass clicks to plugins, so a heading can't be clicked open or shut: use `c` or the settings.
+doesn't pass clicks to plugins, so a heading can't be clicked open or shut: use `c` or the settings, or try
+clickable headings below.
+
+**Clickable headings (experimental): `queues.py entries on`.** Each queue's heading becomes an entry of its own: an
+empty workspace placed just above the queue, whose pane is reported to herdr as an agent (kind `muse`: herdr drops a
+kind it doesn't know) and labelled with the heading. Clicking it collapses or opens the queue, and focus goes back to
+where you were. Needs `s` on (queue or auto order) and `headings queue`; turn either off, or `entries off`, and the
+heading workspaces are closed. Each machine keeps its own, made by its own hooks and watcher. What it costs:
+
+- herdr reports a click and a keyboard switch alike, so **landing on a heading by any route toggles it**: cycling
+  workspaces with the keyboard, or picking it in `prefix+a`. Focus is handed back, with a brief flash.
+- The heading workspaces show in herdr's spaces list and in `herdr workspace list` (named `▾ 🔥 priority`).
+- One click toggles; a double click toggles twice.
+- The plugin's own popup, notifications and nags ignore them.
+
+If herdr ever passes sidebar clicks to plugins ([herdrdev/herdr discussion
+#5806](https://github.com/herdrdev/herdr/discussions/5806)), this gives way to the in-row headings.
 
 **Your config.toml rows** come from `python3 queues.py rows`; paste its output once. They don't change with colours,
 emoji or headings (colours are an invisible marker in the text, matched by fixed rules), only with `mark`.

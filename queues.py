@@ -14,6 +14,7 @@ each with one line of what it needs. Enter jumps to the agent, switching the her
   queues.py headings queue|machine|off;  collapse Q;  mark own|herdr;  spinner on|off;  badge model|gitstatus V [E]
   queues.py rows         herdr's [ui.sidebar.agents] for the mark style (colours are settings: it never changes)
   queues.py spin         the spinner (herdr starts it with the server)
+  queues.py entries on|off   experimental: each queue heading an entry of its own; clicking it collapses the queue
   queues.py label [F]    the sidebar's $queues_label template, e.g. "{queue}{machine} {workspace} {folder}" (any pane
                          token by name); "default" resets
 
@@ -86,7 +87,7 @@ class Live:
         if time.time() - self.down.get(m, 0) < 60:  # an offline machine is retried once a minute, not every round
             return []
         try:
-            ags = json.loads(herdr(m, "agent", "list", timeout=4))["result"]["agents"]
+            ags = real(json.loads(herdr(m, "agent", "list", timeout=4))["result"]["agents"])
             if time.time() - self.names_at.get(m, 0) > 30:  # workspace names change rarely: half the calls
                 ws = json.loads(herdr(m, "workspace", "list", timeout=4))["result"]["workspaces"]
                 self.names[m] = {w["workspace_id"]: w.get("label") or w["workspace_id"] for w in ws}
@@ -546,7 +547,7 @@ RANK = {"blocked": 0, "done": 1, "idle": 2, "working": 3}
 ON = ("queues", "auto")  # the queue sidebar's modes (`s`): static queue order, or re-sorted every minute
 
 
-SETTINGS = ("color", "colorby", "headings", "collapse", "badge", "host", "mark", "spinner")
+SETTINGS = ("color", "colorby", "headings", "collapse", "badge", "host", "mark", "spinner", "entries")
 
 
 def setting(state, cmd, args):
@@ -571,6 +572,8 @@ def setting(state, cmd, args):
         state["mark"] = args[0]
     elif cmd == "spinner" and args[0] in ("on", "off"):
         state["spinner"] = args[0] == "on"
+    elif cmd == "entries" and args[0] in ("on", "off"):
+        state["entries"] = args[0] == "on"
     elif cmd == "badge" and len(args) >= 2 and args[0] in ("model", "gitstatus"):
         b = state.setdefault("badges", {}).setdefault(args[0], {})
         b.update({args[1]: args[2]}) if len(args) > 2 else b.pop(args[1], None)
@@ -623,6 +626,177 @@ def spin_loop():
             time.sleep(5)  # no server (yet): try again later
 
 
+# --- heading entries (experimental, Ben 2026-11-15) -------------------------------------------------------------------
+# herdr gives plugins no sidebar clicks (herdrdev/herdr discussion #5806). So each queue's heading is an entry of its
+# own: an empty pane in a workspace of its own, reported as an agent (HEAD_AGENT), placed just above the queue's first
+# workspace. Clicking it focuses that pane; the pane.focused hook (`queues.py focused`) toggles the queue and puts focus
+# back. Any focus counts: herdr reports a click and a keyboard switch the same way. Only with `s` on, headings queue,
+# `entries on`; otherwise their workspaces are closed. Each machine keeps its own (its watcher and its hooks).
+# herdr keeps a reported agent only if its kind is one it knows (an unknown label is dropped at the next scan of the
+# pane), so headings report as "muse", an obscure kind; they are told apart by their queues_heading_for token.
+HEAD_AGENT, HEAD_SOURCE = "muse", SOURCE + "-heading"
+
+
+def agent_panes():
+    return {a["pane_id"]: a.get("agent") for a in json.loads(herdr(None, "agent", "list"))["result"]["agents"]}
+
+
+def real(agents):
+    return [a for a in agents if not (a.get("tokens") or {}).get("queues_heading_for")]
+
+
+def heading_text(state, q, n_hidden, collapsed):
+    qi = icon(state, q) if q != UNSORTED else ""
+    name = f"{qi} {q}" if qi and qi != q else q
+    return (f"▸ {name} +{n_hidden}" if collapsed and n_hidden else f"▸ {name}" if collapsed else f"▾ {name}")
+
+
+def entries_sync(state, listed):
+    """This machine's heading entries: create, relabel, close, and order them. listed: real agents, sidebar order.
+    Under a lock, re-reading herdr: hooks and the watcher run it at the same time."""
+    import fcntl
+    os.makedirs(STATE_DIR, exist_ok=True)
+    with open(os.path.join(STATE_DIR, "entries.lock"), "w") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        # By token, not by agent: herdr re-detects a new pane once its shell is up and drops the reported agent, so the
+        # agent is reported again whenever it is missing (else every pass made another heading: 2026-11-15 sandbox).
+        heads_here = [p for p in json.loads(herdr(None, "pane", "list"))["result"]["panes"]
+                      if (p.get("tokens") or {}).get("queues_heading_for")]
+        agents_now = agent_panes()  # the pane list never says which agent a pane holds
+        for h in heads_here:
+            h["agent"] = agents_now.get(h["pane_id"])
+        ids = [w["workspace_id"] for w in json.loads(herdr(None, "workspace", "list"))["result"]["workspaces"]]
+        want = state.get("sort") in ON and state.get("headings") == "queue" and state.get("entries")
+        have = {}  # queue -> heading agent
+        for h in heads_here:
+            q = (h.get("tokens") or {}).get("queues_heading_for")
+            if q in have or not q or not want:
+                herdr(None, "workspace", "close", h["workspace_id"])  # a duplicate, or entries are off
+            else:
+                have[q] = h
+        if not want:
+            return
+        shown = [a for a in listed if not inactive(state, a)]
+        groups = []  # queues in sidebar order
+        for a in shown:
+            q = queue_of(state, a)
+            if q not in groups:
+                groups.append(q)
+        for q in list(have):
+            if q not in groups:
+                herdr(None, "workspace", "close", have.pop(q)["workspace_id"])
+        collapsed = set(state.get("collapsed", []))
+        colour = (lambda q: marker((state.get("colors") or {}).get(q))) if (state.get("colorby") or "queue") == "queue" \
+            else (lambda q: "")
+        for h in have.values():
+            if h.get("agent") != HEAD_AGENT:
+                herdr(None, "pane", "report-agent", h["pane_id"], "--source", HEAD_SOURCE, "--agent", HEAD_AGENT, "--state", "idle")
+        for q in groups:
+            n = sum(1 for a in shown if queue_of(state, a) == q) - 1
+            text = heading_text(state, q, n, q in collapsed)
+            h = have.get(q)
+            if not h:
+                r = json.loads(herdr(None, "workspace", "create", "--label", text, "--no-focus"))["result"]
+                pane, wid = r["root_pane"]["pane_id"], r["workspace"]["workspace_id"]
+                call(None, [["pane.report_metadata", {"pane_id": pane, "source": SOURCE, "tokens": {
+                    "queues_heading_for": q, "queues_label": text + colour(q)}}]])  # before it is an agent: see above
+                for _ in range(10):  # herdr drops a reported agent when it detects the new pane's shell: report after
+                    time.sleep(0.5)
+                    herdr(None, "pane", "report-agent", pane, "--source", HEAD_SOURCE, "--agent", HEAD_AGENT, "--state", "idle")
+                    time.sleep(1)
+                    if pane in agent_panes():
+                        break
+                have[q] = h = {"pane_id": pane, "workspace_id": wid, "agent": HEAD_AGENT,
+                               "tokens": {"queues_label": text + colour(q)}}
+                ids = ids + [wid]
+            if (h.get("tokens") or {}).get("queues_label") != text + colour(q):
+                herdr(None, "workspace", "rename", h["workspace_id"], text)
+                call(None, [["pane.report_metadata", {"pane_id": h["pane_id"], "source": SOURCE, "tokens": {
+                    "queues_heading_for": q, "queues_label": text + colour(q)}}]])
+        # each heading just above its queue's first workspace; the rest keep their order
+        heads = {h["workspace_id"] for h in have.values()}
+        first = {}
+        for a in shown:
+            first.setdefault(queue_of(state, a), a["workspace_id"])
+        before = {first[q]: have[q]["workspace_id"] for q in groups if q in first}
+        order = []
+        for w in ids:
+            if w in heads:
+                continue
+            if w in before and before[w] not in order:
+                order.append(before[w])
+            if w not in order:
+                order.append(w)
+        order += [w for w in heads if w not in order]
+        if order != ids:
+            apply_order("", None, order)
+
+
+def focused():
+    """pane.focused hook: a heading entry toggles its queue and hands focus back; any other pane is remembered."""
+    ev = json.loads(os.environ.get("HERDR_PLUGIN_EVENT_JSON") or "{}").get("data", {})
+    pane, last = ev.get("pane_id"), os.path.join(STATE_DIR, "last_focus")
+    panes = {p["pane_id"]: p for p in json.loads(herdr(None, "pane", "list"))["result"]["panes"]}
+    q = ((panes.get(pane) or {}).get("tokens") or {}).get("queues_heading_for")
+    if not q:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(last, "w") as fh:
+            fh.write(ev.get("workspace_id") or "")
+        return
+    state = load()
+    setting(state, "collapse", [q])
+    save(state)
+    try:
+        back = open(last).read().strip()
+        if back:
+            herdr(None, "workspace", "focus", back)
+    except (OSError, RuntimeError):
+        pass
+    refresh()
+
+
+def refresh():
+    """This machine's tokens and heading entries. Runs coalesce: herdr fires a burst of events (each heading change is
+    one), so a run that finds another going marks it to go round once more and exits."""
+    import fcntl
+    os.makedirs(STATE_DIR, exist_ok=True)
+    again = os.path.join(STATE_DIR, "refresh.again")
+    lk = open(os.path.join(STATE_DIR, "refresh.lock"), "w")
+    try:
+        fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        open(again, "w").close()
+        return
+    for _ in range(3):
+        try:
+            os.remove(again)
+        except OSError:
+            pass
+        refresh_once()
+        if not os.path.exists(again):
+            break
+
+
+def refresh_once():
+    if os.path.exists(STATE):
+        time.sleep(1)  # herdr-machine-icons runs on the same event: let its icon land first
+        state = load()
+        listed = json.loads(herdr(None, "agent", "list"))["result"]["agents"]
+        listed = real(listed)
+        ws = json.loads(herdr(None, "workspace", "list"))["result"]["workspaces"]
+        wsn = {w["workspace_id"]: w.get("label") or w["workspace_id"] for w in ws}
+        ids = list(wsn)
+        listed.sort(key=lambda a: ids.index(a["workspace_id"]) if a.get("workspace_id") in ids else len(ids))
+        reqs = []
+        for a in listed:
+            a["host"], a["workspace"] = socket.gethostname(), wsn.get(a.get("workspace_id"), a.get("workspace_id"))
+            t = info(a, state)
+            reqs.append(["pane.report_metadata", {"pane_id": a["pane_id"], "source": INFO, "tokens": t}])
+            a["tokens"] = {**(a.get("tokens") or {}), **{k: v for k, v in t.items() if v}}
+        call(None, reqs + hiding(state, listed))
+        entries_sync(state, listed)
+
+
 def machine_icons():
     path = os.path.expanduser("~/.config/herdr/plugins/config/benjmhart.machine-icons/icons")
     try:
@@ -673,6 +847,9 @@ def hiding(state, agents):
     on, own = state.get("sort") in ON, state.get("mark") == "own"
     fmt = (state.get("label") or LABEL) if on else PLAIN
     collapsed, heads = set(state.get("collapsed", [])), state.get("headings") if on else None
+    entries = heads == "queue" and state.get("entries")  # the headings are entries of their own (entries_sync)
+    if entries:
+        heads = None
     by = state.get("colorby") or "queue"
     live = [a for a in agents if not inactive(state, a)]
     carrier, extra = {}, {}
@@ -714,7 +891,7 @@ def hiding(state, agents):
         if own:
             st = a.get("agent_status")
             mark = SPIN[0] if st == "working" and spin else MARKS.get(st, "?")
-            body = (PAD * (1 if a["pane_id"] in above else 3) if heads else "") + f"{mark} {body}"
+            body = (PAD * (1 if a["pane_id"] in above else 3) if heads else PAD if entries else "") + f"{mark} {body}"
         return {TOKEN: "1" if a["pane_id"] in hidden else None, "queues_queue": qi, "queues_label": body,
                 "queues_heading": above.get(a["pane_id"]), "queues_heading_after": after.get(a["pane_id"])}
     reqs = [["pane.report_metadata", {"pane_id": a["pane_id"], "source": SOURCE, "tokens": tokens(a)}] for a in agents]
@@ -899,7 +1076,7 @@ def relay(ms):
     pipes, started, cache, last, sent = {}, {}, {}, None, 0
     while True:
         try:
-            ags = json.loads(herdr(None, "agent", "list", timeout=4))["result"]["agents"]
+            ags = real(json.loads(herdr(None, "agent", "list", timeout=4))["result"]["agents"])
             ws = json.loads(herdr(None, "workspace", "list", timeout=4))["result"]["workspaces"]
             names = {w["workspace_id"]: w.get("label") or w["workspace_id"] for w in ws}
             seen = {}
@@ -1024,6 +1201,8 @@ def nag(ms, notify=True):
         for m in ms:
             try:
                 listed = json.loads(herdr(m, "agent", "list", timeout=4))["result"]["agents"]
+                heads_here = [a for a in listed if (a.get("tokens") or {}).get("queues_heading_for")]
+                listed = real(listed)
                 ws = json.loads(herdr(m, "workspace", "list", timeout=4))["result"]["workspaces"]
                 wsn = {w["workspace_id"]: w.get("label") or w["workspace_id"] for w in ws}
                 for a in listed:
@@ -1033,11 +1212,15 @@ def nag(ms, notify=True):
                 listed.sort(key=lambda a: ids.index(a["workspace_id"]) if a.get("workspace_id") in ids else len(ids))
                 try:
                     if state.get("sort") == "auto":  # waiting agents float up within their queue (Ben 2026-11-15)
-                        order = by_queues(state, listed, ids)
-                        if order != ids:
-                            apply_order(m, ms[m][1], order)
+                        hw = {a["workspace_id"] for a in heads_here}
+                        rids = [w for w in ids if w not in hw]  # heading entries are placed by entries_sync
+                        order = by_queues(state, listed, rids)
+                        if order != rids:
+                            apply_order(m, ms[m][1], order + [w for w in ids if w in hw])
                             listed.sort(key=lambda a: order.index(a["workspace_id"]) if a.get("workspace_id") in order else len(order))
                     call(ms[m][1], hiding(state, listed))
+                    if m == "":  # heading entries: each machine keeps its own (no two watchers race to create them)
+                        entries_sync(state, listed)
                 except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
                     pass
                 for a in listed:
@@ -1215,7 +1398,7 @@ def settings(scr, state, ms):
     while True:
         hosts = sorted({h for h, _ in ms.values()})
         rows = [("queue", q) for q in state["queues"]] + [("host", h) for h in hosts] + \
-               [("opt", k) for k in ("headings", "colorby", "mark", "spinner")]
+               [("opt", k) for k in ("headings", "colorby", "mark", "spinner", "entries")]
 
         def show(r):
             k, v = r
@@ -1226,14 +1409,15 @@ def settings(scr, state, ms):
             if k == "host":
                 return f"machine  {host_setting(state, v, 'icon') or '·'} {v} · {host_setting(state, v, 'color') or 'no colour'}"
             return f"{v}: " + {"headings": state.get("headings") or "off", "colorby": state.get("colorby") or "queue",
-                               "mark": state.get("mark") or "herdr", "spinner": "on" if state.get("spinner") else "off"}[v]
+                               "mark": state.get("mark") or "herdr", "spinner": "on" if state.get("spinner") else "off",
+                               "entries": ("on" if state.get("entries") else "off") + " (experimental: clickable headings)"}[v]
         i = choose(scr, "sidebar settings: Enter or click to change, Esc closes", [show(r) for r in rows])
         if i is None:
             return "settings saved; the sidebar follows" if changed else ""
         k, v = rows[i]
         if k == "opt":
             opts = {"headings": ["queue", "machine", "off"], "colorby": ["queue", "machine"], "mark": ["own", "herdr"],
-                    "spinner": ["on", "off"]}[v]
+                    "spinner": ["on", "off"], "entries": ["on", "off"]}[v]
             j = choose(scr, v, opts)
             if j is None:
                 continue
@@ -1486,6 +1670,8 @@ def ui(scr):
             scr.refresh()
             msg = resort(state, agents, ms)
             save(state)
+            subprocess.Popen([sys.executable, os.path.abspath(__file__), "refresh"], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # heading entries here, at once
             for a in {a["machine"]: a for a in agents}.values():  # the labels follow at once, not in the watcher's minute
                 retoken(state, agents, a, ms)
         elif c == "enter" and q:
@@ -1548,22 +1734,8 @@ def main(cmd):
             state.get("icons", {}).pop(name, None)
         save(state)
         print(json.dumps(state.get("icons", {}), ensure_ascii=False))
-    elif cmd == "refresh":  # herdr runs it on agent changes and renames: this machine's tokens now
-        if os.path.exists(STATE):
-            time.sleep(1)  # herdr-machine-icons runs on the same event: let its icon land first
-            state = load()
-            listed = json.loads(herdr(None, "agent", "list"))["result"]["agents"]
-            ws = json.loads(herdr(None, "workspace", "list"))["result"]["workspaces"]
-            wsn = {w["workspace_id"]: w.get("label") or w["workspace_id"] for w in ws}
-            ids = list(wsn)
-            listed.sort(key=lambda a: ids.index(a["workspace_id"]) if a.get("workspace_id") in ids else len(ids))
-            reqs = []
-            for a in listed:
-                a["host"], a["workspace"] = socket.gethostname(), wsn.get(a.get("workspace_id"), a.get("workspace_id"))
-                t = info(a, state)
-                reqs.append(["pane.report_metadata", {"pane_id": a["pane_id"], "source": INFO, "tokens": t}])
-                a["tokens"] = {**(a.get("tokens") or {}), **{k: v for k, v in t.items() if v}}
-            call(None, reqs + hiding(state, listed))
+    elif cmd == "refresh":  # herdr runs it on agent changes, renames and focus: this machine's tokens now
+        refresh()
     elif cmd in SETTINGS:
         state, args = load(), sys.argv[2:]
         err = setting(state, cmd, args) if args else None
@@ -1572,9 +1744,11 @@ def main(cmd):
         if args:
             save(state)
         print(json.dumps({k: state.get(k) for k in ("icons", "colors", "hosts", "colorby", "headings", "collapsed",
-                                                    "mark", "spinner", "badges")}, ensure_ascii=False))
+                                                    "mark", "spinner", "entries", "badges")}, ensure_ascii=False))
     elif cmd == "spin":
         spin_loop()
+    elif cmd == "focused":
+        focused()
     elif cmd == "rows":  # herdr's [ui.sidebar.agents] for these colours and headings: paste into config.toml
         print(rows_toml(load()))
     elif cmd == "label":  # queues.py label [FORMAT|default]: the sidebar's $queues_label; no argument shows it

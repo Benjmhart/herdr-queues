@@ -1,6 +1,6 @@
 id = "benjmhart.queues"
 name = "Queues"
-version = "0.19.1"
+version = "0.20.0"
 min_herdr_version = "0.9.3"
 description = "Your own queues (personal, work, ...) of the agents waiting on you, on every machine; Enter jumps there"
 platforms = ["linux", "macos"]
@@ -18,6 +18,11 @@ command = ["python3", "queues.py", "refresh"]
 [[events]]
 on = "pane.agent_status_changed"
 command = ["python3", "queues.py", "refresh"]
+
+# Heading entries (experimental): a click on one toggles its queue.
+[[events]]
+on = "pane.focused"
+command = ["python3", "queues.py", "focused"]
 
 [[events]]
 on = "workspace.renamed"
