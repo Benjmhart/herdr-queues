@@ -809,8 +809,8 @@ def machine_icons():
 # Colours come from a fixed palette, so herdr's rules never change: the label and heading carry an invisible marker,
 # n word joiners (U+2060) for palette slot n, and the rules (`queues.py rows`) match them longest first. herdr can only
 # colour a token by its own text. "own" status marks (instead of herdr's state_icon) let the label start with padding
-# (U+2800: herdr trims spaces), which is how every agent under a heading is indented by one column; herdr itself
-# indents an entry's second row by two, so a heading over a group rides on the previous agent's third row.
+# (U+2800: herdr trims spaces). herdr indents an entry's later rows by two, so a heading on its group's first agent's
+# first row puts that agent two columns in, and the rest of the group pads two to match.
 SIDEBAR_COLOURS = {"red": "#ff5555", "orange": "#ffb86c", "yellow": "#f1fa8c", "green": "#50fa7b", "cyan": "#8be9fd",
                    "purple": "#bd93f9", "pink": "#ff79c6", "grey": "#6272a4"}  # Dracula
 WJ, PAD = "\u2060", "\u2800"
@@ -832,9 +832,10 @@ def rows_toml(state):
              for i, c in reversed(list(enumerate(SIDEBAR_COLOURS.values())))]
     head = '{ token = "$queues_heading", bold = true, rules = [' + ", ".join(slots) + "] }"
     if state.get("mark") == "own":
-        lab = ('{ token = "$queues_label", rules = [{ contains = "⚠", fg = "#ff5555", bold = true }, '
+        # an unstyled token is herdr's dim comment grey: names get the bright text colour (Ben 2026-11-16)
+        lab = ('{ token = "$queues_label", fg = "#f8f8f2", rules = [{ contains = "⚠", fg = "#ff5555", bold = true }, '
                + ", ".join(slots) + "] }")
-        rows = [f"  [{head}],", f"  [{lab}],", "  [" + head.replace("$queues_heading", "$queues_heading_after") + "],"]
+        rows = [f"  [{head}],", f"  [{lab}],"]
     else:
         lab = '{ token = "$queues_label", rules = [' + ", ".join(slots) + "] }"
         rows = [f"  [{head}],", f'  ["state_icon", {lab}],']
@@ -862,7 +863,7 @@ def hiding(state, agents):
     hidden |= {a["pane_id"] for a in agents if inactive(state, a)}
     colour = lambda a: marker((state.get("colors") or {}).get(queue_of(state, a)) if by == "queue"
                               else host_setting(state, a.get("host"), "color"))
-    above, after, prev, last = {}, {}, None, object()
+    above, last = {}, object()
     for a in (a for a in live if a["pane_id"] not in hidden):
         q = queue_of(state, a)
         key = q if heads == "queue" else a.get("host")
@@ -875,25 +876,25 @@ def hiding(state, agents):
             else:
                 mi = host_setting(state, a.get("host"), "icon") or (a.get("tokens") or {}).get("machine_icon") or ""
                 text = f"{mi} {a.get('host', '')}".strip()
-            text += colour(a)
-            if own and prev is not None:
-                after[prev] = text
-            else:
-                above[a["pane_id"]] = PAD * 2 + text if own else text
+            # Every heading on its group's first agent's first row, flush left (Ben 2026-11-16: headings that rode on
+            # the row above sat two columns in, as herdr indents an entry's later rows: "visually confusing").
+            above[a["pane_id"]] = text + colour(a)
             last = key
-        prev = a["pane_id"]
     spin = state.get("spinner")
 
     def tokens(a):
         q = queue_of(state, a)
         qi = None if q == UNSORTED else icon(state, q)
-        body = label(a, qi, fmt, host_setting(state, a.get("host"), "icon")) + colour(a)
+        # Under a heading the heading carries the colour and names keep herdr's text colour: a whole name in red or
+        # green was hard to read on Ben's translucent terminal (2026-11-16). Blocked stays red (the ⚠ rule).
+        body = label(a, qi, fmt, host_setting(state, a.get("host"), "icon")) + ("" if heads or entries else colour(a))
         if own:
             st = a.get("agent_status")
             mark = SPIN[0] if st == "working" and spin else MARKS.get(st, "?")
-            body = (PAD * (1 if a["pane_id"] in above else 3) if heads else PAD if entries else "") + f"{mark} {body}"
+            # herdr indents the label two when a heading is above it; the rest of the group pads to match
+            body = (("" if a["pane_id"] in above else PAD * 2) if heads else PAD if entries else "") + f"{mark} {body}"
         return {TOKEN: "1" if a["pane_id"] in hidden else None, "queues_queue": qi, "queues_label": body,
-                "queues_heading": above.get(a["pane_id"]), "queues_heading_after": after.get(a["pane_id"])}
+                "queues_heading": above.get(a["pane_id"]), "queues_heading_after": None}  # retired 2026-11-16; cleared
     reqs = [["pane.report_metadata", {"pane_id": a["pane_id"], "source": SOURCE, "tokens": tokens(a)}] for a in agents]
     return reqs + [["agent.view.set", VIEW] if hidden else ["agent.view.clear", {"source": SOURCE}]]
 

@@ -23,13 +23,14 @@ assert t["p1"]["queues_heading"] == "🐭 micro" and t["p2"]["queues_heading"] i
 assert q.setting(st, "color", ["priority", "#ff5555"]) and not q.setting(st, "color", ["priority", "red"])
 r = q.rows_toml(st); tomllib.loads(r); assert "$queues_heading_after" not in r and "state_icon" in r
 st.update(mark="own", headings="queue", sort="queues", spinner=True); r = q.rows_toml(st); tomllib.loads(r)
-assert "$queues_heading_after" in r and "state_icon" not in r and q.WJ not in r  # escaped, not invisible
-t = tok(st)  # own marks: heading above the first agent only, later headings ride on the previous agent's 3rd row
+assert "$queues_heading_after" not in r and "#f8f8f2" in r and "state_icon" not in r and q.WJ not in r  # escaped, not invisible
+t = tok(st)  # own marks: every heading flush left on its group's first agent; names uncoloured under headings
 P, W = q.PAD, q.WJ
-assert t["p1"]["queues_heading"] == P * 2 + "▾ 🔥 priority" + W  # red = palette slot 1
-assert t["p1"]["queues_label"] == P + q.SPIN[0] + " 🔥🐭 a" + W  # working: the spinner's first frame
-assert t["p2"]["queues_label"] == P * 3 + "⚠ 🔥🐭 b" + W and t["p2"]["queues_heading_after"] == "▾ work"
-assert t["p3"]["queues_label"] == P * 3 + "○ work🐭 c" and t["p3"]["queues_heading"] is None
+assert t["p1"]["queues_heading"] == "▾ 🔥 priority" + W  # red = palette slot 1
+assert t["p1"]["queues_label"] == q.SPIN[0] + " 🔥🐭 a"  # herdr indents it two; working: the spinner's first frame
+assert t["p2"]["queues_label"] == P * 2 + "⚠ 🔥🐭 b" and t["p2"]["queues_heading"] is None
+assert t["p3"]["queues_label"] == "○ work🐭 c" and t["p3"]["queues_heading"] == "▾ work"
+assert all(t[p]["queues_heading_after"] is None for p in t)
 assert not q.setting(st, "host", ["micro", "icon", "🦊"]); t = tok(st); assert "🦊" in t["p1"]["queues_label"]
 d = tempfile.mkdtemp(); subprocess.run(["git", "-C", d, "init", "-q"])
 assert q.git_of(d) == "clean"; open(d + "/f", "w").write("x"); assert q.git_of(d) == "dirty"; assert q.git_of("/") is None

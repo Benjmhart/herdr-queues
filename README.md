@@ -180,7 +180,9 @@ emoji or headings (colours are an invisible marker in the text, matched by fixed
 **Status marks.** With `mark herdr` the row starts with herdr's own `state_icon`. herdr can't pad before it and indents
 an entry's second line by two, so the first agent under a heading sits two columns right of the rest. With `mark own`
 the plugin draws the mark (⚠ blocked, red; ✓ finished; ○ idle; ● or a spinner while working) and pads it, so every
-agent under a heading is indented by one column. Spinners: `queues.py spin`, started by herdr with the server, turns
+heading sits flush left and every agent under it two columns in (herdr indents the first by two; the rest pad to match).
+Under headings the heading carries the colour and names stay in the bright text colour; with clickable headings
+(below) agents sit one column in. Spinners: `queues.py spin`, started by herdr with the server, turns
 working marks four times a second on its own machine.
 
 ### Info tokens
