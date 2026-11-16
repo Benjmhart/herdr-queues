@@ -29,7 +29,7 @@ P, W = q.PAD, q.WJ
 assert t["p1"]["queues_heading"] == "▾ 🔥 priority" + W  # red = palette slot 1
 assert t["p1"]["queues_label"] == q.SPIN[0] + " 🔥🐭 a"  # herdr indents it two; working: the spinner's first frame
 assert t["p2"]["queues_label"] == P * 2 + "🔴 🔥🐭 b" and t["p2"]["queues_heading"] is None
-assert t["p3"]["queues_label"] == "⚪ work🐭 c" and t["p3"]["queues_heading"] == "▾ work"
+assert t["p3"]["queues_label"] == P * 2 + " work🐭 c" and t["p3"]["queues_heading"] == "▾ work"
 assert all(t[p]["queues_heading_after"] is None for p in t)
 assert not q.setting(st, "host", ["micro", "icon", "🦊"]); t = tok(st); assert "🦊" in t["p1"]["queues_label"]
 d = tempfile.mkdtemp(); subprocess.run(["git", "-C", d, "init", "-q"])
@@ -65,4 +65,12 @@ st3["collapsed"] = ["priority"]
 t3 = {r[1]["pane_id"]: r[1]["tokens"] for r in q.hiding(st3, [b1, b2, b3]) if r[0] == "pane.report_metadata"}
 assert t3["p2"]["queues_inactive"] == "1" and t3["p3"]["queues_inactive"] == "1" and t3["p1"]["queues_inactive"] is None
 assert q.hiding(st3, [b1], "carbon")[-1][1] == q.view(st3, "carbon")
+# finer marks (0.25): question vs job done, seen, background work
+D = lambda st, **tk: {"pane_id": "p", "agent_status": st, "state_change_seq": 7, "tokens": tk}
+assert q.need(D("done")) == "done" and q.need(D("done", queues_seen="7")) == "done_seen" and q.need(D("done", queues_seen="6")) == "done"
+assert q.need(D("done", queues_asks="1")) == "asks" and q.need(D("idle", queues_asks="1")) == "asks_seen"
+assert q.need(D("done", queues_bg="1")) == "background" and q.need(D("idle")) == "idle" and q.need(D("working")) == "working"
+assert q.mark_of(D("done", queues_seen="7"), False) == "✓ " and q.mark_of(D("working"), True) == q.SPIN[0]
+assert q.asks_text("Done.\n\nShall I push it?") and not q.asks_text("Is it? Yes.\n\nAll pushed.")
+assert q.BG.search("-- INSERT -- ⏵⏵ auto mode on · 1 shell · ← 2 agents") and not q.BG.search("· ← 2 agents")
 print("ok")

@@ -9,14 +9,14 @@ switches to that agent's machine and focuses it.
 ←→/h l/tab queue · ↑↓/j k · enter: go to agent · m: move to queue · 1-9: move to that queue · a: all/waiting
 queues: n new · r rename · d delete · </> reorder · q quit
 
-! beast-arch · mlabs-marketing  Sales and marketing strategy for new customers
-    Bash command: Save report, update nag, commit and push -- Do you want to proceed?
+! desktop · billing-api  Add invoice export
+    Bash command: Run the migration and push -- Do you want to proceed?
 
-! carbon · castiron  next-story:bmad-pony loop
-    9.11 scope: How should I proceed?
+! laptop · docs-site  Rewrite the getting-started guide
+    Which framework should the examples use?
 
-✓ nihongo-smash  Next-story:bmad-pony loop
-    Stories 6.15 and 6.16 are merged and staging is green, which finishes all of Epic 6. The loop is paused until…
+✓ mobile-app  Fix the login crash
+    The fix is merged and CI is green. Nothing left to do on this one.
 ```
 
 - **A queue lists all its agents**, the waiting ones first: blocked (`!`, it asked you something), then done (`✓`, it
@@ -126,7 +126,7 @@ rows = [["state_icon", "$queues_queue", "workspace", "machine", "tab"]]
 herdr has no templates of its own: a row is a list of tokens it joins with ` · ` (none after `state_icon`), and
 `"$a$b"` is refused. For the icons and the name with no divider, use `$queues_label`: the queue's
 icon, the machine's icon ([herdr-machine-icons](https://github.com/Benjmhart/herdr-machine-icons)' `$machine_icon`, when
-installed) and the workspace name in one token, `🔥🐭 station-maintenance`. The watcher refreshes it every minute, so a
+installed) and the workspace name in one token, `🔥🐭 billing-api`. The watcher refreshes it every minute, so a
 renamed workspace shows within one.
 
 ```toml
@@ -149,7 +149,7 @@ same from a shell:
     python3 queues.py collapse work             # collapse/open a queue (or `c` in the popup): one row, "▸ work +3"
     python3 queues.py icon priority 🔥          # a queue's emoji
     python3 queues.py color priority red        # red orange yellow green cyan purple pink grey (Dracula), none
-    python3 queues.py host beast-arch icon 🐺   # a machine's emoji (overrides herdr-machine-icons), or: color purple
+    python3 queues.py host desktop icon 🐺   # a machine's emoji (overrides herdr-machine-icons), or: color purple
     python3 queues.py colorby machine           # colour rows by queue (default) or by machine
     python3 queues.py mark own                  # status marks drawn by the plugin: indented groups, spinner
     python3 queues.py spinner on                # working agents spin (needs mark own)
@@ -187,8 +187,12 @@ emoji or headings (colours are an invisible marker in the text, matched by fixed
 
 **Status marks.** With `mark herdr` the row starts with herdr's own `state_icon`. herdr can't pad before it and indents
 an entry's second line by two, so the first agent under a heading sits two columns right of the rest. With `mark own`
-the plugin draws the mark as coloured emoji (🔴 blocked, its name red too; ✅ finished; ⚪ idle; 🟡 working, or a
-moon-phase spinner 🌑🌒🌓🌔🌕🌖🌗🌘) and pads it, so every
+the plugin draws the mark as coloured emoji: 🔴 blocked on an approval or question dialog (its name red too); ❓ stopped
+on a question to you, ❔ once you have looked at it; ✅ finished, ✓ once you have looked at it; ⏳ stopped but running
+its own background shell (nothing needed from you); 🕐 working, or a clock spinner; nothing when idle.
+"A question" is read from a Claude session's transcript (its last reply ends a paragraph with `?`), background work
+from Claude Code's footer (`· 1 shell`), and "looked at" is focusing the agent since it stopped (herdr's own seen
+state is per client) and pads it, so every
 heading sits flush left and every agent under it two columns in (herdr indents the first by two; the rest pad to match).
 Under headings the heading carries the colour and names stay in the bright text colour; with clickable headings
 (below) agents sit one column in. Spinners: `queues.py spin`, started by herdr with the server, turns
@@ -215,7 +219,7 @@ instead; any token works there by name:
 
     python3 queues.py badge gitstatus dirty ±
     python3 queues.py badge model opus 🟣
-    python3 queues.py label '{queue}{machine} {workspace} {model}{gitstatus}'   # 🔥🐭 station-maintenance 🟣±
+    python3 queues.py label '{queue}{machine} {workspace} {model}{gitstatus}'   # 🔥🐭 billing-api 🟣±
 
 
 Its layout is yours, synced to every machine like the queues:

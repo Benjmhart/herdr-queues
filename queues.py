@@ -457,7 +457,7 @@ def rank_of(state, a=None, q=None):
         return f"{qi:03d}-"  # a prefix of every agent's rank in the queue: sorts first
     p = position(state, q, a)
     # auto: the ones waiting on you float to the top of their queue, ahead of your J/K order (Ben 2026-11-16)
-    st = RANK.get(a.get("agent_status"), 4) if state.get("sort") == "auto" else 0
+    st = NEED.get(need(a), 7) if state.get("sort") == "auto" else 0
     return f"{qi:03d}-{st}-{9999 if p is None else p + 1:04d}-{a.get('host', '')}-{a.get('workspace', '')}"
 
 
@@ -577,7 +577,52 @@ def info(a, state):
     raw = {"model": model_of(sid) if sid else None, "gitstatus": git_of(a.get("foreground_cwd") or a.get("cwd")),
            "usage": usage_of(sid) if sid else None}
     b = state.get("badges", {})
-    return {k: (v if k == "usage" else b.get(k, {}).get(v, v)) if v else None for k, v in raw.items()}
+    out = {k: (v if k == "usage" else b.get(k, {}).get(v, v)) if v else None for k, v in raw.items()}
+    stopped = a.get("agent_status") in ("done", "idle")
+    out["queues_asks"] = "1" if stopped and sid and asks(sid) else None
+    out["queues_bg"] = "1" if stopped and a.get("agent") == "claude" and background(a["pane_id"]) else None
+    return out
+
+
+def asks(sid):
+    """True when the session's last reply ends on a question to you: it stopped for an answer, not with the job done."""
+    import glob
+    for path in glob.glob(os.path.expanduser(f"~/.claude/projects/*/{sid}.jsonl")):
+        with open(path, "rb") as fh:
+            fh.seek(max(0, os.path.getsize(path) - 524288))
+            lines = fh.read().splitlines()
+        for ln in reversed(lines):
+            try:
+                e = json.loads(ln)
+            except ValueError:
+                continue
+            if e.get("type") == "user" and not any(c.get("type") == "tool_result" for c in
+                                                   (e.get("message") or {}).get("content") or [] if isinstance(c, dict)):
+                return False  # you spoke after it
+            if e.get("type") != "assistant":
+                continue
+            text = [c.get("text", "") for c in (e.get("message") or {}).get("content") or []
+                    if isinstance(c, dict) and c.get("type") == "text"]
+            if text:
+                return asks_text(text[-1])
+    return False
+
+
+def asks_text(text):
+    """The last paragraph of a reply asks something."""
+    last = [p for p in text.strip().split("\n\n") if p.strip()][-1:] or [""]
+    return "?" in last[0]
+
+
+BG = re.compile(r"· \d+ (shells?|background tasks?)\b")
+
+
+def background(pane):
+    """Claude Code's footer counts the shells it runs in the background ("· 1 shell")."""
+    try:
+        return bool(BG.search(herdr(None, "agent", "read", pane, "--source", "visible", timeout=4)))
+    except (RuntimeError, OSError, subprocess.TimeoutExpired):
+        return False
 
 
 RANK = {"blocked": 0, "done": 1, "idle": 2, "working": 3}
@@ -640,8 +685,11 @@ def spin_loop():
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         sys.exit(0)
-    state, seen, i = {}, None, 0
+    state, seen, i, checked = {}, None, 0, time.time()
     while True:
+        if time.time() - checked > 60:
+            checked = time.time()
+            follow_install(lock)
         try:
             m = os.stat(STATE).st_mtime
             if m != seen:
@@ -756,6 +804,13 @@ def focused():
         os.makedirs(STATE_DIR, exist_ok=True)
         with open(last, "w") as fh:
             fh.write(ev.get("workspace_id") or "")
+        # you looked at it: a finished agent's mark dims (herdr's own seen state is per client, the server's stays done)
+        a = next((a for a in sock("agent.list", {})["result"]["agents"] if a["pane_id"] == pane), None)
+        # done, or idle already: a focus from the CLI marks herdr's seen state and fires no status event (sandbox)
+        if a and a.get("agent_status") in ("done", "idle") and (a.get("tokens") or {}).get("queues_seen") != str(a.get("state_change_seq")):
+            sock("pane.report_metadata", {"pane_id": pane, "source": SOURCE,
+                                          "tokens": {"queues_seen": str(a.get("state_change_seq"))}})
+            refresh(fresh_info=False)
         return
     state = load()
     setting(state, "collapse", [q])
@@ -816,7 +871,7 @@ def refresh_once(fresh_info=True):
             if fresh_info:  # git and transcripts: not on a heading click, the tokens already there do
                 t = info(a, state)
                 reqs.append(["pane.report_metadata", {"pane_id": a["pane_id"], "source": INFO, "tokens": t}])
-                a["tokens"] = {**(a.get("tokens") or {}), **{k: v for k, v in t.items() if v}}
+                a["tokens"] = {**(a.get("tokens") or {}), **t}
         call(None, changed(reqs + hiding(state, listed), before))
         entries_sync(state, listed)
 
@@ -840,8 +895,33 @@ SIDEBAR_COLOURS = {"red": "#ff5555", "orange": "#ffb86c", "yellow": "#f1fa8c", "
 WJ, PAD = "\u2060", "\u2800"
 # Emoji, so they carry their own colour: a herdr rule colours a whole token, never one character of it (Ben
 # 2026-11-16: status icons "brighter and colored", and a coloured spinner).
-MARKS = {"blocked": "🔴", "done": "✅", "idle": "⚪", "working": "🟡"}
-SPIN = "🌑🌒🌓🌔🌕🌖🌗🌘"
+# Ben 2026-11-16: idle should not catch the eye (blank), a checked agent dims, a question differs from "job done",
+# and an agent waiting on its own shell or subagent needs nothing from you. Width-1 marks are padded to two.
+MARKS = {"blocked": "🔴", "asks": "❓", "asks_seen": "❔", "done": "✅", "done_seen": "✓", "background": "⏳",
+         "idle": PAD * 2, "working": "🕐", "unknown": "·"}
+SPIN = "🕐🕑🕒🕓🕔🕕🕖🕗🕘🕙🕚🕛"  # clock faces: light on a dark background (the new moon was invisible)
+NEED = {"blocked": 0, "asks": 1, "done": 2, "asks_seen": 3, "background": 4, "done_seen": 5, "idle": 5, "working": 6}
+
+
+def need(a):
+    """What the agent wants from you, finer than herdr's status: a question vs. a finished job (the transcript), seen
+    (you focused it since it stopped: queues_seen, or herdr's idle), waiting on its own background work (the screen)."""
+    st, t = a.get("agent_status"), a.get("tokens") or {}
+    if st in ("working", "blocked") or st not in ("done", "idle"):
+        return st if st in ("working", "blocked") else "unknown"
+    seen = st == "idle" or t.get("queues_seen") == str(a.get("state_change_seq"))
+    if t.get("queues_asks"):
+        return "asks_seen" if seen else "asks"
+    if t.get("queues_bg"):
+        return "background"
+    return "idle" if st == "idle" else "done_seen" if seen else "done"
+
+
+def mark_of(a, spin):
+    n = need(a)
+    m = SPIN[0] if n == "working" and spin else MARKS[n]
+    import unicodedata
+    return m if sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in m) >= 2 else m + " "
 
 
 def marker(colour):
@@ -883,7 +963,7 @@ def hiding(state, agents, host=HOST):
     for q in collapsed:
         ms = [] if entries else [a for a in live if queue_of(state, a) == q]
         if ms:
-            c = min(ms, key=lambda a: (RANK.get(a.get("agent_status"), 4), live.index(a)))
+            c = min(ms, key=lambda a: (NEED.get(need(a), 7), live.index(a)))
             carrier[q], extra[q] = c["pane_id"], len(ms) - 1
     hidden = {a["pane_id"] for a in live if queue_of(state, a) in carrier and carrier[queue_of(state, a)] != a["pane_id"]}
     hidden |= {a["pane_id"] for a in agents if inactive(state, a)}
@@ -918,7 +998,7 @@ def hiding(state, agents, host=HOST):
         body = label(a, qi, fmt, host_setting(state, a.get("host"), "icon")) + ("" if heads or entries else colour(a))
         if own:
             st = a.get("agent_status")
-            mark = SPIN[0] if st == "working" and spin else MARKS.get(st, "?")
+            mark = mark_of(a, spin)
             # herdr indents the label two when a heading is above it; the rest of the group pads to match
             body = (("" if a["pane_id"] in above else PAD * 2) if heads else PAD if entries else "") + f"{mark} {body}"
         return {TOKEN: "1" if a["pane_id"] in hidden else None, "queues_queue": qi, "queues_label": body,
@@ -1172,16 +1252,21 @@ def watch(notify=True):
     threading.Thread(target=relay, args=(ms,), daemon=True).start()
     threading.Thread(target=nag, args=(ms, notify), daemon=True).start()
     threading.Thread(target=on_state_change, daemon=True).start()
-    here = os.path.dirname(os.path.realpath(__file__))
-    while True:  # a `herdr plugin install`/update leaves this process on the old code: follow it (Ben 2026-11-15)
+    while True:
         time.sleep(60)
-        try:
-            root = json.loads(herdr(None, "plugin", "list", "--plugin", PLUGIN, "--json"))["result"]["plugins"][0]["plugin_root"]
-        except (RuntimeError, OSError, ValueError, KeyError, IndexError, subprocess.TimeoutExpired):
-            continue
-        if os.path.realpath(root) != here and os.path.exists(os.path.join(root, "queues.py")):
-            lock.close()
-            os.execv(sys.executable, [sys.executable, os.path.join(root, "queues.py")] + sys.argv[1:])
+        follow_install(lock)
+
+
+def follow_install(lock):
+    """A `herdr plugin install`/update leaves a running process on the old code: re-exec onto the new one (Ben
+    2026-11-15). For the watcher and the spinner."""
+    try:
+        root = json.loads(herdr(None, "plugin", "list", "--plugin", PLUGIN, "--json"))["result"]["plugins"][0]["plugin_root"]
+    except (RuntimeError, OSError, ValueError, KeyError, IndexError, subprocess.TimeoutExpired):
+        return
+    if os.path.realpath(root) != os.path.dirname(os.path.realpath(__file__)) and os.path.exists(os.path.join(root, "queues.py")):
+        lock.close()
+        os.execv(sys.executable, [sys.executable, os.path.join(root, "queues.py")] + sys.argv[1:])
 
 
 # How long an agent may wait on you before a desktop notification says so. blocked = it asked something (a permission
