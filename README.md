@@ -196,9 +196,9 @@ state is per client). A mark can colour its row (blocked red, done green, workin
 colours a whole token, so the spinner can't be yellow on its own. Every mark, its colour and each spinner frame are
 settings, synced to every machine:
 
-    python3 queues.py icon done ✅                 # a mark: blocked asks asks_seen done done_seen background idle working unknown
-    python3 queues.py icon working color none      # the row's colour: red orange yellow green cyan purple pink grey, or none
-    python3 queues.py icon spin '◐ ◓ ◑ ◒'          # spinner frames, space-separated; `default` puts any of them back
+    python3 queues.py status done ✅               # a mark: blocked asks asks_seen done done_seen background idle working unknown
+    python3 queues.py status working color none    # the row's colour: red orange yellow green cyan purple pink grey, or none
+    python3 queues.py status spin '◐ ◓ ◑ ◒'        # spinner frames, space-separated; `default` puts any of them back
  and pads it, so every
 heading sits flush left and every agent under it two columns in (herdr indents the first by two; the rest pad to match).
 Under headings the heading carries the colour and names stay in the bright text colour; with clickable headings

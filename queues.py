@@ -12,7 +12,7 @@ each with one line of what it needs. Enter jumps to the agent, switching the her
   queues.py color Q C    queue Q's colour (red orange yellow green cyan purple pink grey, none); colorby queue|machine
   queues.py host H icon E | host H color C   a machine's emoji (overrides herdr-machine-icons) and colour
   queues.py headings queue|machine|off;  collapse Q;  mark own|herdr;  spinner on|off;  badge model|gitstatus V [E]
-  queues.py icon NAME GLYPH|default;  icon NAME color COLOUR|none;  icon spin 'F1 F2 ...'|default   (NAME: blocked asks asks_seen done done_seen background idle working unknown)
+  queues.py status NAME GLYPH|default;  status NAME color COLOUR|none;  status spin 'F1 F2 ...'|default   (NAME: blocked asks asks_seen done done_seen background idle working unknown)
   queues.py rows         herdr's [ui.sidebar.agents] for the mark style (colours are settings: it never changes)
   queues.py spin         the spinner (herdr starts it with the server)
   queues.py entries on|off   experimental: each queue heading an entry of its own; clicking it collapses the queue
@@ -630,7 +630,7 @@ RANK = {"blocked": 0, "done": 1, "idle": 2, "working": 3}
 ON = ("queues", "auto")  # the queue sidebar's modes (`s`): static queue order, or re-sorted every minute
 
 
-SETTINGS = ("color", "colorby", "headings", "collapse", "badge", "host", "mark", "spinner", "entries", "icon")
+SETTINGS = ("color", "colorby", "headings", "collapse", "badge", "host", "mark", "spinner", "entries", "status")
 
 
 def setting(state, cmd, args):
@@ -653,11 +653,11 @@ def setting(state, cmd, args):
         state["collapsed"] = sorted(set(state.get("collapsed", [])) ^ {args[0]})
     elif cmd == "mark" and args[0] in ("own", "herdr"):
         state["mark"] = args[0]
-    elif cmd == "icon":  # icon NAME GLYPH|default; icon NAME color COLOUR|none; icon spin "F1 F2 ..."|default
+    elif cmd == "status":  # status NAME GLYPH|default; status NAME color COLOUR|none; status spin "F1 F2 ..."|default
         names = (*MARKS, "spin")
         if len(args) < 2 or args[0] not in names or (args[1] == "color" and (len(args) < 3 or args[2] not in
                                                                              (*SIDEBAR_COLOURS, "none"))):
-            return f"icon {'|'.join(names)} GLYPH|default  or  icon NAME color {'|'.join(SIDEBAR_COLOURS)}|none"
+            return f"status {'|'.join(names)} GLYPH|default  or  status NAME color {'|'.join(SIDEBAR_COLOURS)}|none"
         if args[1] == "color":
             state.setdefault("mark_colors", {})[args[0]] = None if args[2] == "none" else args[2]
         elif args[0] == "spin":
@@ -924,7 +924,7 @@ MARKS = {"blocked": "🔴", "asks": "❓", "asks_seen": "❔", "done": "✔", "d
 # list: a frame may be more than one character.
 SPIN = ["\uee06", "\uee07", "\uee08", "\uee09", "\uee0a", "\uee0b"]
 # Each mark may colour its row: a herdr rule colours a whole token, so a coloured spinner means a coloured row. Palette
-# names (the label's invisible marker), so no config change. `queues.py icon NAME color COLOUR|none`.
+# names (the label's invisible marker), so no config change. `queues.py status NAME color COLOUR|none`.
 MARK_COLOURS = {"blocked": "red", "done": "green", "working": "yellow"}
 NEED = {"blocked": 0, "asks": 1, "done": 2, "asks_seen": 3, "background": 4, "done_seen": 5, "idle": 5, "working": 6}
 

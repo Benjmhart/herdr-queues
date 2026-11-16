@@ -74,8 +74,8 @@ assert q.mark_of(D("done", queues_seen="7"), False) == "✓ " and q.mark_of(D("w
 assert q.asks_text("Done.\n\nShall I push it?") and not q.asks_text("Is it? Yes.\n\nAll pushed.")
 assert q.BG.search("-- INSERT -- ⏵⏵ auto mode on · 1 shell · ← 2 agents") and not q.BG.search("· ← 2 agents")
 st4 = {}
-assert q.setting(st4, "icon", ["bogus", "x"]) and not q.setting(st4, "icon", ["done", "✓"]) and q.marks(st4)["done"] == "✓"
-assert not q.setting(st4, "icon", ["spin", "a", "b"]) and q.spin_frames(st4) == ["a", "b"]
-assert not q.setting(st4, "icon", ["working", "color", "none"]) and q.mark_colour(st4, "working") is None
-assert not q.setting(st4, "icon", ["done", "default"]) and q.marks(st4)["done"] == "✔"
+assert q.setting(st4, "status", ["bogus", "x"]) and not q.setting(st4, "status", ["done", "✓"]) and q.marks(st4)["done"] == "✓"
+assert not q.setting(st4, "status", ["spin", "a", "b"]) and q.spin_frames(st4) == ["a", "b"]
+assert not q.setting(st4, "status", ["working", "color", "none"]) and q.mark_colour(st4, "working") is None
+assert not q.setting(st4, "status", ["done", "default"]) and q.marks(st4)["done"] == "✔"
 print("ok")
