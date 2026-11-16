@@ -187,15 +187,15 @@ emoji or headings (colours are an invisible marker in the text, matched by fixed
 
 **Status marks.** With `mark herdr` the row starts with herdr's own `state_icon`. herdr can't pad before it and indents
 an entry's second line by two, so the first agent under a heading sits two columns right of the rest. With `mark own`
-the plugin draws the mark (⚠ blocked, red; ✓ finished; ○ idle; ● or a spinner while working) and pads it, so every
+the plugin draws the mark as coloured emoji (🔴 blocked, its name red too; ✅ finished; ⚪ idle; 🟡 working, or a
+moon-phase spinner 🌑🌒🌓🌔🌕🌖🌗🌘) and pads it, so every
 heading sits flush left and every agent under it two columns in (herdr indents the first by two; the rest pad to match).
 Under headings the heading carries the colour and names stay in the bright text colour; with clickable headings
 (below) agents sit one column in. Spinners: `queues.py spin`, started by herdr with the server, turns
 working marks four times a second on its own machine.
 
-herdr colours its `state_icon` by state (Dracula: idle green, working yellow, blocked red), and a token can only be
-coloured whole, so only `mark herdr` gives coloured marks with bright names. It suits clickable headings: each is its
-own entry, so nothing is indented, and a heading reports herdr's `unknown` state, a grey `·`, before its name.
+A herdr rule colours a whole token, never one character, so the own marks are emoji: they bring their own colour
+and the name stays bright. With `mark herdr`, a clickable heading shows herdr's `unknown` state icon, a grey `·`.
 
 ### Info tokens
 

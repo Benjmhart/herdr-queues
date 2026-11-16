@@ -837,8 +837,10 @@ def machine_icons():
 SIDEBAR_COLOURS = {"red": "#ff5555", "orange": "#ffb86c", "yellow": "#f1fa8c", "green": "#50fa7b", "cyan": "#8be9fd",
                    "purple": "#bd93f9", "pink": "#ff79c6", "grey": "#6272a4"}  # Dracula
 WJ, PAD = "\u2060", "\u2800"
-MARKS = {"blocked": "⚠", "done": "✓", "idle": "○", "working": "●"}
-SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+# Emoji, so they carry their own colour: a herdr rule colours a whole token, never one character of it (Ben
+# 2026-11-16: status icons "brighter and colored", and a coloured spinner).
+MARKS = {"blocked": "🔴", "done": "✅", "idle": "⚪", "working": "🟡"}
+SPIN = "🌑🌒🌓🌔🌕🌖🌗🌘"
 
 
 def marker(colour):
@@ -856,7 +858,7 @@ def rows_toml(state):
     head = '{ token = "$queues_heading", bold = true, rules = [' + ", ".join(slots) + "] }"
     if state.get("mark") == "own":
         # an unstyled token is herdr's dim comment grey: names get the bright text colour (Ben 2026-11-16)
-        lab = ('{ token = "$queues_label", fg = "#f8f8f2", rules = [{ contains = "⚠", fg = "#ff5555", bold = true }, '
+        lab = ('{ token = "$queues_label", fg = "#f8f8f2", rules = [{ contains = "' + MARKS["blocked"] + '", fg = "#ff5555", bold = true }, '
                + ", ".join(slots) + "] }")
         rows = [f"  [{head}],", f"  [{lab}],"]
     else:
@@ -911,7 +913,7 @@ def hiding(state, agents, host=HOST):
         q = queue_of(state, a)
         qi = None if q == UNSORTED else icon(state, q)
         # Under a heading the heading carries the colour and names keep herdr's text colour: a whole name in red or
-        # green was hard to read on Ben's translucent terminal (2026-11-16). Blocked stays red (the ⚠ rule).
+        # green was hard to read on Ben's translucent terminal (2026-11-16). Blocked stays red (the 🔴 rule).
         body = label(a, qi, fmt, host_setting(state, a.get("host"), "icon")) + ("" if heads or entries else colour(a))
         if own:
             st = a.get("agent_status")

@@ -28,8 +28,8 @@ t = tok(st)  # own marks: every heading flush left on its group's first agent; n
 P, W = q.PAD, q.WJ
 assert t["p1"]["queues_heading"] == "▾ 🔥 priority" + W  # red = palette slot 1
 assert t["p1"]["queues_label"] == q.SPIN[0] + " 🔥🐭 a"  # herdr indents it two; working: the spinner's first frame
-assert t["p2"]["queues_label"] == P * 2 + "⚠ 🔥🐭 b" and t["p2"]["queues_heading"] is None
-assert t["p3"]["queues_label"] == "○ work🐭 c" and t["p3"]["queues_heading"] == "▾ work"
+assert t["p2"]["queues_label"] == P * 2 + "🔴 🔥🐭 b" and t["p2"]["queues_heading"] is None
+assert t["p3"]["queues_label"] == "⚪ work🐭 c" and t["p3"]["queues_heading"] == "▾ work"
 assert all(t[p]["queues_heading_after"] is None for p in t)
 assert not q.setting(st, "host", ["micro", "icon", "🦊"]); t = tok(st); assert "🦊" in t["p1"]["queues_label"]
 d = tempfile.mkdtemp(); subprocess.run(["git", "-C", d, "init", "-q"])
