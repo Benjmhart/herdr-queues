@@ -1,9 +1,19 @@
 id = "benjmhart.queues"
 name = "Queues"
-version = "0.16.0"
+version = "0.17.0"
 min_herdr_version = "0.9.3"
 description = "Your own queues (personal, work, ...) of the agents waiting on you, on every machine; Enter jumps there"
 platforms = ["linux", "macos"]
+
+# Labels follow at once, not in the watcher's minute: a new agent, a renamed workspace (and herdr-machine-icons'
+# icon, which lands with the agent).
+[[events]]
+on = "pane.agent_detected"
+command = ["python3", "queues.py", "refresh"]
+
+[[events]]
+on = "workspace.renamed"
+command = ["python3", "queues.py", "refresh"]
 
 [[actions]]
 id = "open"

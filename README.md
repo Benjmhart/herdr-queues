@@ -146,7 +146,8 @@ Its layout is yours, synced to every machine like the queues:
 It is a template. Fields: `{queue}` (icon, or name when it has none; empty while unsorted), `{machine}`
 (`$machine_icon`), `{workspace}`, `{host}`, `{agent}` (claude, codex, ...), `{title}` (the pane's terminal title), and
 **every token on the agent's pane by name**: `{folder}`, `{fold}`, any plugin's. A field the pane doesn't have is empty;
-an empty field drops out with its spaces. The sidebar follows within the watcher's minute.
+an empty field drops out with its spaces. A new agent or a renamed workspace shows at once (herdr runs `queues.py refresh`); `s`, a new template or a
+queue change shows within the watcher's minute. The watcher follows a plugin update by itself.
 
 The watcher keeps the tokens up on every machine it reaches (once a minute); a move in the popup updates them at once.
 herdr's agent list has no section headers, so the icon is the queue's mark.

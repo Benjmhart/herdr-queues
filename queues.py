@@ -8,6 +8,7 @@ each with one line of what it needs. Enter jumps to the agent, switching the her
   queues.py watch        run on the machine you sit at: carries out jumps asked for by a popup on any machine
   queues.py jump M P     switch the herdr window to machine M and focus pane P
   queues.py icon Q [E]   icon E for queue Q in herdr's sidebar ($queues_queue); no E clears it
+  queues.py refresh      this machine's sidebar tokens now (herdr runs it on rename and new agents)
   queues.py label [F]    the sidebar's $queues_label template, e.g. "{queue}{machine} {workspace} {folder}" (any pane
                          token by name); "default" resets
 
@@ -711,8 +712,16 @@ def watch(notify=True):
         threading.Thread(target=follow, args=(label, ms), daemon=True).start()
     threading.Thread(target=relay, args=(ms,), daemon=True).start()
     threading.Thread(target=nag, args=(ms, notify), daemon=True).start()
-    while True:
-        time.sleep(3600)
+    here = os.path.dirname(os.path.realpath(__file__))
+    while True:  # a `herdr plugin install`/update leaves this process on the old code: follow it (Ben 2026-11-15)
+        time.sleep(60)
+        try:
+            root = json.loads(herdr(None, "plugin", "list", "--plugin", PLUGIN, "--json"))["result"]["plugins"][0]["plugin_root"]
+        except (RuntimeError, OSError, ValueError, KeyError, IndexError, subprocess.TimeoutExpired):
+            continue
+        if os.path.realpath(root) != here and os.path.exists(os.path.join(root, "queues.py")):
+            lock.close()
+            os.execv(sys.executable, [sys.executable, os.path.join(root, "queues.py")] + sys.argv[1:])
 
 
 # How long an agent may wait on you before a desktop notification says so. blocked = it asked something (a permission
@@ -1213,6 +1222,15 @@ def main(cmd):
             state.get("icons", {}).pop(name, None)
         save(state)
         print(json.dumps(state.get("icons", {}), ensure_ascii=False))
+    elif cmd == "refresh":  # herdr runs it when an agent appears or a workspace is renamed: this machine's labels now
+        if os.path.exists(STATE):
+            time.sleep(1)  # herdr-machine-icons runs on the same event: let its icon land first
+            listed = json.loads(herdr(None, "agent", "list"))["result"]["agents"]
+            ws = json.loads(herdr(None, "workspace", "list"))["result"]["workspaces"]
+            wsn = {w["workspace_id"]: w.get("label") or w["workspace_id"] for w in ws}
+            for a in listed:
+                a["host"], a["workspace"] = socket.gethostname(), wsn.get(a.get("workspace_id"), a.get("workspace_id"))
+            call(None, hiding(load(), listed))
     elif cmd == "label":  # queues.py label [FORMAT|default]: the sidebar's $queues_label; no argument shows it
         state = load()
         if len(sys.argv) > 2:
