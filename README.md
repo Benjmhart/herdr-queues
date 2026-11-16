@@ -193,6 +193,10 @@ Under headings the heading carries the colour and names stay in the bright text 
 (below) agents sit one column in. Spinners: `queues.py spin`, started by herdr with the server, turns
 working marks four times a second on its own machine.
 
+herdr colours its `state_icon` by state (Dracula: idle green, working yellow, blocked red), and a token can only be
+coloured whole, so only `mark herdr` gives coloured marks with bright names. It suits clickable headings: each is its
+own entry, so nothing is indented, and a heading reports herdr's `unknown` state, a grey `·`, before its name.
+
 ### Info tokens
 
 Written on each agent's machine as it changes, for rows or the label template:

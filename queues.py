@@ -698,9 +698,10 @@ def entries_sync(state, listed):
         # agent is reported again whenever it is missing (else every pass made another heading: 2026-11-15 sandbox).
         heads_here = [p for p in json.loads(herdr(None, "pane", "list"))["result"]["panes"]
                       if (p.get("tokens") or {}).get("queues_heading_for")]
-        agents_now = agent_panes()  # the pane list never says which agent a pane holds
-        for h in heads_here:
-            h["agent"] = agents_now.get(h["pane_id"])
+        agents_now = {a["pane_id"]: a for a in json.loads(herdr(None, "agent", "list"))["result"]["agents"]}
+        for h in heads_here:  # the pane list never says which agent a pane holds
+            h["agent"] = (agents_now.get(h["pane_id"]) or {}).get("agent")
+            h["status"] = (agents_now.get(h["pane_id"]) or {}).get("agent_status")
         want = entries_on(state)
         have = {}  # queue -> heading agent
         for h in heads_here:
@@ -719,8 +720,8 @@ def entries_sync(state, listed):
         colour = (lambda q: marker((state.get("colors") or {}).get(q))) if (state.get("colorby") or "queue") == "queue" \
             else (lambda q: "")
         for h in have.values():
-            if h.get("agent") != HEAD_AGENT:
-                herdr(None, "pane", "report-agent", h["pane_id"], "--source", HEAD_SOURCE, "--agent", HEAD_AGENT, "--state", "idle")
+            if h.get("agent") != HEAD_AGENT or h.get("status") != "unknown":  # "·": herdr's quietest state_icon
+                herdr(None, "pane", "report-agent", h["pane_id"], "--source", HEAD_SOURCE, "--agent", HEAD_AGENT, "--state", "unknown")
         for q in groups:
             text = heading_text(state, q, 0, q in collapsed)  # ponytail: no "+N": no one machine sees every agent
             toks = {"queues_heading_for": q, "queues_label": text + colour(q), "queues_rank": rank_of(state, q=q),
@@ -732,7 +733,7 @@ def entries_sync(state, listed):
                 call(None, [["pane.report_metadata", {"pane_id": pane, "source": SOURCE, "tokens": toks}]])
                 for _ in range(10):  # herdr drops a reported agent when it detects the new pane's shell: report after
                     time.sleep(0.5)
-                    herdr(None, "pane", "report-agent", pane, "--source", HEAD_SOURCE, "--agent", HEAD_AGENT, "--state", "idle")
+                    herdr(None, "pane", "report-agent", pane, "--source", HEAD_SOURCE, "--agent", HEAD_AGENT, "--state", "unknown")
                     time.sleep(1)
                     if pane in agent_panes():
                         break
@@ -859,7 +860,7 @@ def rows_toml(state):
                + ", ".join(slots) + "] }")
         rows = [f"  [{head}],", f"  [{lab}],"]
     else:
-        lab = '{ token = "$queues_label", rules = [' + ", ".join(slots) + "] }"
+        lab = '{ token = "$queues_label", fg = "#f8f8f2", rules = [' + ", ".join(slots) + "] }"
         rows = [f"  [{head}],", f'  ["state_icon", {lab}],']
     return "[ui.sidebar.agents]\nrows = [\n" + "\n".join(rows) + "\n]"
 
