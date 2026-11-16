@@ -449,15 +449,16 @@ def groups_of(state):
 
 
 def rank_of(state, a=None, q=None):
-    """queues_rank: a heading sorts first in its queue ("-0000"), then agents by your order, status (auto), machine."""
+    """queues_rank: a heading sorts first in its queue ("NNN-"), then agents by status (auto), your order, machine."""
     q = q if a is None else queue_of(state, a)
     gs = groups_of(state)
     qi = gs.index(q) if q in gs else len(gs)
     if a is None:
-        return f"{qi:03d}-0000"
+        return f"{qi:03d}-"  # a prefix of every agent's rank in the queue: sorts first
     p = position(state, q, a)
+    # auto: the ones waiting on you float to the top of their queue, ahead of your J/K order (Ben 2026-11-16)
     st = RANK.get(a.get("agent_status"), 4) if state.get("sort") == "auto" else 0
-    return f"{qi:03d}-{9999 if p is None else p + 1:04d}-{st}-{a.get('host', '')}-{a.get('workspace', '')}"
+    return f"{qi:03d}-{st}-{9999 if p is None else p + 1:04d}-{a.get('host', '')}-{a.get('workspace', '')}"
 
 
 def inactive(state, agent):

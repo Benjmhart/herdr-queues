@@ -55,6 +55,10 @@ for a, qn in zip([b1, b2, b3], ["work", "priority", "priority"]):
     q.put(st3, a, qn)
 ranks = sorted([(q.rank_of(st3, a), a["pane_id"]) for a in (b1, b2, b3)] + [(q.rank_of(st3, q=g), g) for g in q.groups_of(st3)])
 assert [p for _, p in ranks] == ["priority", "p2", "p3", "work", "p1", "unsorted"], ranks
+st3["sort"] = "auto"; q.put(st3, b3, "priority")
+assert q.rank_of(st3, b2) < q.rank_of(st3, b3)  # auto: blocked first
+st3["rank"] = {"priority": [q.keys(b3)[0]]}; assert q.rank_of(st3, b2) < q.rank_of(st3, b3)  # even ahead of J/K order
+st3["sort"] = "queues"; assert q.rank_of(st3, b3) < q.rank_of(st3, b2); st3.pop("rank")
 v = q.view(st3, "micro"); assert v["sort"][0]["field"] == {"token": "queues_rank"} and "micro" in str(v["filter"])
 assert q.view(dict(st3, entries=False), "micro") == q.VIEW
 st3["collapsed"] = ["priority"]
