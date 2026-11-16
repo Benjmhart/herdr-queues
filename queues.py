@@ -9,8 +9,11 @@ each with one line of what it needs. Enter jumps to the agent, switching the her
   queues.py jump M P     switch the herdr window to machine M and focus pane P
   queues.py icon Q [E]   icon E for queue Q in herdr's sidebar ($queues_queue); no E clears it
   queues.py refresh      this machine's sidebar tokens now (herdr runs it on rename and new agents)
-  queues.py color K [#h] colour for queue or host K;  colorby queue|machine;  headings queue|machine|off
-  queues.py collapse Q   collapse/open queue Q;  badge model|gitstatus VALUE [EMOJI];  rows: herdr config for these
+  queues.py color Q C    queue Q's colour (red orange yellow green cyan purple pink grey, none); colorby queue|machine
+  queues.py host H icon E | host H color C   a machine's emoji (overrides herdr-machine-icons) and colour
+  queues.py headings queue|machine|off;  collapse Q;  mark own|herdr;  spinner on|off;  badge model|gitstatus V [E]
+  queues.py rows         herdr's [ui.sidebar.agents] for the mark style (colours are settings: it never changes)
+  queues.py spin         the spinner (herdr starts it with the server)
   queues.py label [F]    the sidebar's $queues_label template, e.g. "{queue}{machine} {workspace} {folder}" (any pane
                          token by name); "default" resets
 
@@ -468,9 +471,9 @@ class Blank(dict):
         return ""
 
 
-def label(a, qi, fmt=LABEL):
-    toks = {k: v for k, v in (a.get("tokens") or {}).items() if k != "queues_label"}  # not itself
-    f = Blank(toks, queue=qi or "", machine=toks.get("machine_icon") or "",
+def label(a, qi, fmt=LABEL, machine=None):
+    toks = {k: v for k, v in (a.get("tokens") or {}).items() if not k.startswith("queues_")}  # not its own
+    f = Blank(toks, queue=qi or "", machine=machine or toks.get("machine_icon") or "",
               workspace=a.get("workspace") or a.get("workspace_id", ""), host=a.get("host", ""),
               agent=a.get("agent", ""), title=a.get("terminal_title_stripped", ""),
               usage_pct=f"{toks['usage']}%" if toks.get("usage") else "")
@@ -543,6 +546,83 @@ RANK = {"blocked": 0, "done": 1, "idle": 2, "working": 3}
 ON = ("queues", "auto")  # the queue sidebar's modes (`s`): static queue order, or re-sorted every minute
 
 
+SETTINGS = ("color", "colorby", "headings", "collapse", "badge", "host", "mark", "spinner")
+
+
+def setting(state, cmd, args):
+    """One settings change (the CLI and the popup's settings share it). Returns an error message or None."""
+    if cmd == "color":  # color QUEUE NAME|none
+        if len(args) < 2 or args[1] not in (*SIDEBAR_COLOURS, "none"):
+            return f"color QUEUE {'|'.join(SIDEBAR_COLOURS)}|none"
+        c = state.setdefault("colors", {})
+        c.pop(args[0], None) if args[1] == "none" else c.update({args[0]: args[1]})
+    elif cmd == "host":  # host HOST icon EMOJI|none, host HOST color NAME|none
+        if len(args) < 3 or args[1] not in ("icon", "color") or (args[1] == "color" and args[2] not in (*SIDEBAR_COLOURS, "none")):
+            return f"host HOST icon EMOJI|none  or  host HOST color {'|'.join(SIDEBAR_COLOURS)}|none"
+        h = state.setdefault("hosts", {}).setdefault(args[0], {})
+        h.pop(args[1], None) if args[2] == "none" else h.update({args[1]: args[2]})
+    elif cmd == "colorby" and args[0] in ("queue", "machine"):
+        state["colorby"] = args[0]
+    elif cmd == "headings" and args[0] in ("queue", "machine", "off"):
+        state["headings"] = None if args[0] == "off" else args[0]
+    elif cmd == "collapse":
+        state["collapsed"] = sorted(set(state.get("collapsed", [])) ^ {args[0]})
+    elif cmd == "mark" and args[0] in ("own", "herdr"):
+        state["mark"] = args[0]
+    elif cmd == "spinner" and args[0] in ("on", "off"):
+        state["spinner"] = args[0] == "on"
+    elif cmd == "badge" and len(args) >= 2 and args[0] in ("model", "gitstatus"):
+        b = state.setdefault("badges", {}).setdefault(args[0], {})
+        b.update({args[1]: args[2]}) if len(args) > 2 else b.pop(args[1], None)
+    else:
+        return "see queues.py --help"
+    return None
+
+
+def sock(method, params):
+    """One request to this machine's herdr; the parsed response."""
+    path = os.environ.get("HERDR_SOCKET_PATH") or os.path.join(
+        os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "herdr/herdr.sock")
+    with socket.socket(socket.AF_UNIX) as sk:
+        sk.settimeout(3)
+        sk.connect(path)
+        sk.sendall((json.dumps({"id": "spin", "method": method, "params": params}) + "\n").encode())
+        return json.loads(sk.makefile().readline())
+
+
+def spin_loop():
+    """Started by herdr with the server (the manifest's startup): turns the working mark of this machine's agents,
+    4 frames a second, while `spinner on` and `mark own`. Only the label's mark changes; one process per server."""
+    import fcntl
+    os.makedirs(STATE_DIR, exist_ok=True)
+    lock = open(os.path.join(STATE_DIR, "spin.lock"), "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        sys.exit(0)
+    state, seen, i = {}, None, 0
+    while True:
+        try:
+            m = os.stat(STATE).st_mtime
+            if m != seen:
+                state, seen = load(), m
+        except OSError:
+            pass
+        if not (state.get("spinner") and state.get("mark") == "own"):
+            time.sleep(2)
+            continue
+        time.sleep(0.25)
+        i += 1
+        try:
+            for a in sock("agent.list", {})["result"]["agents"]:
+                lab = (a.get("tokens") or {}).get("queues_label") or ""
+                if a.get("agent_status") == "working" and any(ch in lab for ch in SPIN):
+                    new = re.sub(f"[{SPIN}]", SPIN[i % len(SPIN)], lab, count=1)
+                    sock("pane.report_metadata", {"pane_id": a["pane_id"], "source": SOURCE, "tokens": {"queues_label": new}})
+        except (OSError, ValueError, KeyError):
+            time.sleep(5)  # no server (yet): try again later
+
+
 def machine_icons():
     path = os.path.expanduser("~/.config/herdr/plugins/config/benjmhart.machine-icons/icons")
     try:
@@ -551,28 +631,48 @@ def machine_icons():
         return {}
 
 
+# --- the sidebar's look (Ben 2026-11-15) ------------------------------------------------------------------------------
+# Colours come from a fixed palette, so herdr's rules never change: the label and heading carry an invisible marker,
+# n word joiners (U+2060) for palette slot n, and the rules (`queues.py rows`) match them longest first. herdr can only
+# colour a token by its own text. "own" status marks (instead of herdr's state_icon) let the label start with padding
+# (U+2800: herdr trims spaces), which is how every agent under a heading is indented by one column; herdr itself
+# indents an entry's second row by two, so a heading over a group rides on the previous agent's third row.
+SIDEBAR_COLOURS = {"red": "#ff5555", "orange": "#ffb86c", "yellow": "#f1fa8c", "green": "#50fa7b", "cyan": "#8be9fd",
+                   "purple": "#bd93f9", "pink": "#ff79c6", "grey": "#6272a4"}  # Dracula
+WJ, PAD = "\u2060", "\u2800"
+MARKS = {"blocked": "⚠", "done": "✓", "idle": "○", "working": "●"}
+SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def marker(colour):
+    return WJ * (list(SIDEBAR_COLOURS).index(colour) + 1) if colour in SIDEBAR_COLOURS else ""
+
+
+def host_setting(state, host, what):
+    return (state.get("hosts") or {}).get(host, {}).get(what)
+
+
 def rows_toml(state):
-    """Colours are herdr rules on the label's text (the only way herdr colours a token by value): `contains` the queue's
-    icon, or the machine's. A queue without an icon is matched by its name, which a workspace name can contain too."""
-    colors = state.get("colors", {})
-    if state.get("colorby") == "machine":
-        icons = machine_icons()
-        pairs = [(icons.get(h, h), c) for h, c in colors.items() if h not in state["queues"]]
+    """herdr's [ui.sidebar.agents] for the current mark style. Static: colours are settings, not config."""
+    slots = [f'{{ contains = "{WJ * (i + 1)}", fg = "{c}" }}' for i, c in reversed(list(enumerate(SIDEBAR_COLOURS.values())))]
+    head = '{ token = "$queues_heading", bold = true, rules = [' + ", ".join(slots) + "] }"
+    if state.get("mark") == "own":
+        lab = ('{ token = "$queues_label", rules = [{ contains = "⚠", fg = "#ff5555", bold = true }, '
+               + ", ".join(slots) + "] }")
+        rows = [f"  [{head}],", f"  [{lab}],", "  [" + head.replace("$queues_heading", "$queues_heading_after") + "],"]
     else:
-        pairs = [(icon(state, q), colors[q]) for q in state["queues"] if q in colors]
-    rules = ", ".join(f'{{ contains = {json.dumps(n, ensure_ascii=False)}, fg = "{c}" }}' for n, c in pairs[:16])
-    r = f", rules = [{rules}]" if rules else ""
-    return ("[ui.sidebar.agents]\nrows = [\n"
-            f'  [{{ token = "$queues_heading", bold = true{r} }}],\n'
-            f'  ["state_icon", {{ token = "$queues_label"{r} }}],\n]')
+        lab = '{ token = "$queues_label", rules = [' + ", ".join(slots) + "] }"
+        rows = [f"  [{head}],", f'  ["state_icon", {lab}],']
+    return "[ui.sidebar.agents]\nrows = [\n" + "\n".join(rows) + "\n]"
 
 
 def hiding(state, agents):
-    """One machine's requests: each agent's tokens (hidden, queue, label, heading), then the view. agents in sidebar order.
-    Hidden: inactive, or in a collapsed queue and not its most urgent agent (that one carries the queue: "+N")."""
-    on = state.get("sort") in ON
+    """One machine's requests: each agent's tokens (hidden, queue, label, headings), then the view. agents in sidebar
+    order. Hidden: inactive, or in a collapsed queue and not its most urgent agent (that one carries the queue: "+N")."""
+    on, own = state.get("sort") in ON, state.get("mark") == "own"
     fmt = (state.get("label") or LABEL) if on else PLAIN
     collapsed, heads = set(state.get("collapsed", [])), state.get("headings") if on else None
+    by = state.get("colorby") or "queue"
     live = [a for a in agents if not inactive(state, a)]
     carrier, extra = {}, {}
     for q in collapsed:
@@ -582,27 +682,40 @@ def hiding(state, agents):
             carrier[q], extra[q] = c["pane_id"], len(ms) - 1
     hidden = {a["pane_id"] for a in live if queue_of(state, a) in carrier and carrier[queue_of(state, a)] != a["pane_id"]}
     hidden |= {a["pane_id"] for a in agents if inactive(state, a)}
-    heading, last = {}, object()
-    for a in live:  # a heading on the first shown agent of each run: queue (▾ open, ▸ collapsed) or machine
-        if a["pane_id"] in hidden or not heads:
-            continue
+    colour = lambda a: marker((state.get("colors") or {}).get(queue_of(state, a)) if by == "queue"
+                              else host_setting(state, a.get("host"), "color"))
+    above, after, prev, last = {}, {}, None, object()
+    for a in (a for a in live if a["pane_id"] not in hidden):
         q = queue_of(state, a)
         key = q if heads == "queue" else a.get("host")
-        if key != last:
+        if heads and key != last:
             if heads == "queue":
                 qi = icon(state, q) if q != UNSORTED else ""
                 name = f"{qi} {q}" if qi and qi != q else q
-                heading[a["pane_id"]] = (f"▸ {name} +{extra[q]}" if q in carrier and extra[q] else
-                                         f"▸ {name}" if q in carrier else f"▾ {name}")
+                text = (f"▸ {name} +{extra[q]}" if q in carrier and extra[q] else
+                        f"▸ {name}" if q in carrier else f"▾ {name}")
             else:
-                heading[a["pane_id"]] = f"{(a.get('tokens') or {}).get('machine_icon') or ''} {a.get('host', '')}".strip()
+                mi = host_setting(state, a.get("host"), "icon") or (a.get("tokens") or {}).get("machine_icon") or ""
+                text = f"{mi} {a.get('host', '')}".strip()
+            text += colour(a)
+            if own and prev is not None:
+                after[prev] = text
+            else:
+                above[a["pane_id"]] = PAD * 2 + text if own else text
             last = key
+        prev = a["pane_id"]
+    spin = state.get("spinner")
 
     def tokens(a):
         q = queue_of(state, a)
         qi = None if q == UNSORTED else icon(state, q)
-        return {TOKEN: "1" if a["pane_id"] in hidden else None, "queues_queue": qi,
-                "queues_label": label(a, qi, fmt), "queues_heading": heading.get(a["pane_id"])}
+        body = label(a, qi, fmt, host_setting(state, a.get("host"), "icon")) + colour(a)
+        if own:
+            st = a.get("agent_status")
+            mark = SPIN[0] if st == "working" and spin else MARKS.get(st, "?")
+            body = (PAD * (1 if a["pane_id"] in above else 3) if heads else "") + f"{mark} {body}"
+        return {TOKEN: "1" if a["pane_id"] in hidden else None, "queues_queue": qi, "queues_label": body,
+                "queues_heading": above.get(a["pane_id"]), "queues_heading_after": after.get(a["pane_id"])}
     reqs = [["pane.report_metadata", {"pane_id": a["pane_id"], "source": SOURCE, "tokens": tokens(a)}] for a in agents]
     return reqs + [["agent.view.set", VIEW] if hidden else ["agent.view.clear", {"source": SOURCE}]]
 
@@ -953,10 +1066,10 @@ def nag(ms, notify=True):
 # --- the list ---------------------------------------------------------------------------------------------------
 
 HELP = ("←→/h l/tab queue · ↑↓/j k pgup pgdn g G · enter: go to agent · m: move to queue · 1-9: move to that queue · a: waiting only/all\n"
-        "J/K: move down/up in the queue · i: inactive (off herdr's sidebar, sinks to the bottom) · b: alerts on/off\nqueues: n new · r rename · d delete · </> reorder · s: sidebar: your order / queues / queues, waiting first · c: collapse queue · q quit")
+        "J/K: move down/up in the queue · i: inactive (off herdr's sidebar, sinks to the bottom) · b: alerts on/off\nqueues: n new · r rename · d delete · </> reorder · s: sidebar: your order / queues / queues, waiting first · c: collapse queue · ,: settings · q quit")
 # The mouse (Ben 2026-11-14: "clickable buttons and scrolling of the agent list for mouse users"): each button sends its
 # key. Click a tab to open it, a line to select it, the selected line again to go to it; the wheel scrolls.
-BUTTONS = [("go", "enter"), ("▲", "K"), ("▼", "J"), ("move", "m"), ("waiting/all", "a"), ("inactive", "i"), ("alerts", "b"), ("sort", "s"), ("collapse", "c"),
+BUTTONS = [("go", "enter"), ("▲", "K"), ("▼", "J"), ("move", "m"), ("waiting/all", "a"), ("inactive", "i"), ("alerts", "b"), ("sort", "s"), ("collapse", "c"), ("settings", ","),
            ("new", "n"), ("rename", "r"), ("delete", "d"), ("<", "<"), (">", ">"), ("quit", "q")]
 WHEEL_UP = getattr(curses, "BUTTON4_PRESSED", 0)
 WHEEL_DOWN = getattr(curses, "BUTTON5_PRESSED", 0x200000)  # ncurses 6; older Pythons lack the name
@@ -1091,6 +1204,67 @@ def choose(scr, title, options):
             return int(c) - 1
 
 
+EMOJI = ["🔥", "🏠", "💼", "⭐", "🚀", "🧪", "📚", "🎮", "💰", "🛠", "🐺", "🐭", "💎", "📺", "🏄", "🦊"]
+
+
+def settings(scr, state, ms):
+    """`,` or [settings] in the popup: every sidebar setting by keys or mouse (each list takes clicks and the wheel;
+    emoji and colours are picked from lists, typing is optional). Returns a message once anything changed."""
+    changed = False
+    while True:
+        hosts = sorted({h for h, _ in ms.values()})
+        rows = [("queue", q) for q in state["queues"]] + [("host", h) for h in hosts] + \
+               [("opt", k) for k in ("headings", "colorby", "mark", "spinner")]
+
+        def show(r):
+            k, v = r
+            if k == "queue":
+                qi = icon(state, v)
+                return (f"queue    {qi if qi != v else '·'} {v} · {(state.get('colors') or {}).get(v, 'no colour')}"
+                        + (" · collapsed" if v in state.get("collapsed", []) else ""))
+            if k == "host":
+                return f"machine  {host_setting(state, v, 'icon') or '·'} {v} · {host_setting(state, v, 'color') or 'no colour'}"
+            return f"{v}: " + {"headings": state.get("headings") or "off", "colorby": state.get("colorby") or "queue",
+                               "mark": state.get("mark") or "herdr", "spinner": "on" if state.get("spinner") else "off"}[v]
+        i = choose(scr, "sidebar settings: Enter or click to change, Esc closes", [show(r) for r in rows])
+        if i is None:
+            return "settings saved; the sidebar follows" if changed else ""
+        k, v = rows[i]
+        if k == "opt":
+            opts = {"headings": ["queue", "machine", "off"], "colorby": ["queue", "machine"], "mark": ["own", "herdr"],
+                    "spinner": ["on", "off"]}[v]
+            j = choose(scr, v, opts)
+            if j is None:
+                continue
+            setting(state, v, [opts[j]])
+        else:
+            what = choose(scr, v, ["emoji", "colour"] + (["collapse / open"] if k == "queue" else []))
+            if what is None:
+                continue
+            if what == 2:
+                setting(state, "collapse", [v])
+            elif what == 0:
+                j = choose(scr, f"{v}: emoji", EMOJI + ["type one…", "none"])
+                if j is None:
+                    continue
+                e = "none" if j == len(EMOJI) + 1 else prompt(scr, "emoji: ") if j == len(EMOJI) else EMOJI[j]
+                if not e:
+                    continue
+                if k == "queue":
+                    ic = state.setdefault("icons", {})
+                    ic.pop(v, None) if e == "none" else ic.update({v: e})
+                else:
+                    setting(state, "host", [v, "icon", e])
+            else:
+                cs = list(SIDEBAR_COLOURS) + ["none"]
+                j = choose(scr, f"{v}: colour", cs)
+                if j is None:
+                    continue
+                setting(state, "color", [v, cs[j]]) if k == "queue" else setting(state, "host", [v, "color", cs[j]])
+        save(state)
+        changed = True
+
+
 def go(agent, ms):
     """Enter. Returns a message when the jump can't happen from here, else None (the list closes)."""
     if not agent["machine"] and not STANDALONE:  # this server, and the popup's window is showing it
@@ -1171,6 +1345,12 @@ def ui(scr):
         sel = max(0, min(sel, len(q) - 1))
         h, w = scr.getmaxyx()
         hl = len(HELP.splitlines())
+        bl, bx = 1, 0  # button lines: the bar wraps on a narrow popup, so every button stays clickable
+        for label, k in BUTTONS:
+            if bx and bx + len(label) + 2 > w - 1:
+                bl, bx = bl + 1, 0
+            bx += len(label) + 3
+        hl += bl - 1  # the list starts below the wrapped bar
         rows = max(1, h - hl - 3)  # tabs, the help lines, the buttons, the list, the message line
         top = min(max(top, sel - rows + 1), sel, max(0, len(q) - rows))  # keep the selection in view
         top = max(0, top)
@@ -1184,12 +1364,14 @@ def ui(scr):
                 hits.append((0, x, x + len(t), ("tab", i)))
                 x = put_str(scr, 0, x, t, (C.get("tab", curses.A_REVERSE) if i == (cur or 0) else 0)
                             | (curses.A_BOLD if n else 0)) + 1
-            for i, ln in enumerate(HELP.splitlines()):
+            for i, ln in enumerate(HELP.splitlines()):  # (hl now counts the bar's extra lines too)
                 put_str(scr, 1 + i, 0, ln, C.get("help", 0))
-            x = 0
+            x, y = 0, 1 + hl - (bl - 1)
             for label, k in BUTTONS:
-                hits.append((1 + hl, x, x + len(label) + 2, ("key", k)))
-                x = put_str(scr, 1 + hl, x, f"[{label}]", C.get("machine", 0)) + 1
+                if x and x + len(label) + 2 > w - 1:
+                    x, y = 0, y + 1
+                hits.append((y, x, x + len(label) + 2, ("key", k)))
+                x = put_str(scr, y, x, f"[{label}]", C.get("machine", 0)) + 1
             if not live.loaded:
                 put_str(scr, 2 + hl, 2, f"loading {len(ms)} machines…", C.get("help", 0))
             elif not q:
@@ -1268,6 +1450,14 @@ def ui(scr):
             sel = len(q) - 1
         elif c == "a":
             everyone = not everyone
+        elif c == ",":
+            mark = state.get("mark")
+            msg = settings(scr, state, ms)
+            for a in {a["machine"]: a for a in agents}.values():
+                retoken(state, agents, a, ms)
+            if state.get("mark") != mark:
+                msg = "status marks changed: herdr's rows must match (queues.py rows, into config.toml)"
+            drawn = None
         elif c == "c":  # collapse / open this queue in herdr's sidebar
             name = qs[cur or 0]
             state["collapsed"] = sorted(set(state.get("collapsed", [])) ^ {name})
@@ -1373,29 +1563,17 @@ def main(cmd):
                 reqs.append(["pane.report_metadata", {"pane_id": a["pane_id"], "source": INFO, "tokens": t}])
                 a["tokens"] = {**(a.get("tokens") or {}), **{k: v for k, v in t.items() if v}}
             call(None, reqs + hiding(state, listed))
-    elif cmd in ("color", "colorby", "headings", "collapse", "badge"):
+    elif cmd in SETTINGS:
         state, args = load(), sys.argv[2:]
-        if cmd == "color" and args:  # color KEY [#hex]: KEY is a queue or a host; no hex clears
-            if len(args) > 1 and not re.fullmatch(r"#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})", args[1]):
-                sys.exit("herdr-queues: colours are #RGB or #RRGGBB (herdr's rule)")
-            c = state.setdefault("colors", {})
-            c.update({args[0]: args[1]}) if len(args) > 1 else c.pop(args[0], None)
-        elif cmd == "colorby" and args and args[0] in ("queue", "machine"):
-            state["colorby"] = args[0]
-        elif cmd == "headings" and args and args[0] in ("queue", "machine", "off"):
-            state["headings"] = None if args[0] == "off" else args[0]
-        elif cmd == "collapse" and args:
-            c = set(state.get("collapsed", []))
-            state["collapsed"] = sorted(c ^ {args[0]})
-        elif cmd == "badge" and len(args) >= 2 and args[0] in ("model", "gitstatus"):
-            b = state.setdefault("badges", {}).setdefault(args[0], {})
-            b.update({args[1]: args[2]}) if len(args) > 2 else b.pop(args[1], None)
-        elif args:
-            sys.exit(__doc__)
+        err = setting(state, cmd, args) if args else None
+        if err:
+            sys.exit(f"herdr-queues: {err}")
         if args:
             save(state)
-        print(json.dumps({k: state.get(k) for k in ("colors", "colorby", "headings", "collapsed", "badges")},
-                         ensure_ascii=False))
+        print(json.dumps({k: state.get(k) for k in ("icons", "colors", "hosts", "colorby", "headings", "collapsed",
+                                                    "mark", "spinner", "badges")}, ensure_ascii=False))
+    elif cmd == "spin":
+        spin_loop()
     elif cmd == "rows":  # herdr's [ui.sidebar.agents] for these colours and headings: paste into config.toml
         print(rows_toml(load()))
     elif cmd == "label":  # queues.py label [FORMAT|default]: the sidebar's $queues_label; no argument shows it

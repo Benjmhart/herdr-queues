@@ -138,18 +138,33 @@ queue order, automatic (every minute, blocked and finished agents float to the t
 is only the workspace name, so a row built on it still reads like herdr's own; a row without `$queues_label` is never
 touched, so other plugins or herdr's defaults keep the sidebar.
 
-### Headings, collapsing, colours
+### Settings: `,` in the popup
 
-    python3 queues.py headings queue      # a heading over each queue (or: machine, off): $queues_heading
-    python3 queues.py collapse work       # collapse/open a queue (or `c` in the popup): one row, "▸ work +3"
-    python3 queues.py color priority '#ff5555'   # by queue (or host: color beast-arch '#bd93f9')
-    python3 queues.py colorby queue       # or machine
-    python3 queues.py rows                # prints herdr's [ui.sidebar.agents] for these: paste into config.toml
+`,` or the `[settings]` button lists every sidebar setting: each queue (emoji, colour, collapsed), each machine (emoji,
+colour), headings, colour by, status marks, spinner. Everything is a list you can click, scroll or pick by number;
+emoji and colours come from lists (typing an emoji is optional). Changes sync to every machine like the queues. The
+same from a shell:
 
-A collapsed queue keeps one row: its most urgent agent (blocked, then finished), under `▸ name +N`. Colours are herdr
-rules on the label's text (`contains` the queue's or the machine's icon), so give coloured queues an icon; re-run
-`rows` after changing colours. herdr indents an entry's second row, so the first agent under a heading sits two
-columns in.
+    python3 queues.py headings queue            # a heading over each queue (or: machine, off)
+    python3 queues.py collapse work             # collapse/open a queue (or `c` in the popup): one row, "▸ work +3"
+    python3 queues.py icon priority 🔥          # a queue's emoji
+    python3 queues.py color priority red        # red orange yellow green cyan purple pink grey (Dracula), none
+    python3 queues.py host beast-arch icon 🐺   # a machine's emoji (overrides herdr-machine-icons), or: color purple
+    python3 queues.py colorby machine           # colour rows by queue (default) or by machine
+    python3 queues.py mark own                  # status marks drawn by the plugin: indented groups, spinner
+    python3 queues.py spinner on                # working agents spin (needs mark own)
+
+A collapsed queue keeps one row: its most urgent agent (blocked, then finished), under `▸ name +N`. herdr's sidebar
+doesn't pass clicks to plugins, so a heading can't be clicked open or shut: use `c` or the settings.
+
+**Your config.toml rows** come from `python3 queues.py rows`; paste its output once. They don't change with colours,
+emoji or headings (colours are an invisible marker in the text, matched by fixed rules), only with `mark`.
+
+**Status marks.** With `mark herdr` the row starts with herdr's own `state_icon`. herdr can't pad before it and indents
+an entry's second line by two, so the first agent under a heading sits two columns right of the rest. With `mark own`
+the plugin draws the mark (⚠ blocked, red; ✓ finished; ○ idle; ● or a spinner while working) and pads it, so every
+agent under a heading is indented by one column. Spinners: `queues.py spin`, started by herdr with the server, turns
+working marks four times a second on its own machine.
 
 ### Info tokens
 
@@ -159,12 +174,18 @@ Written on each agent's machine as it changes, for rows or the label template:
 |---|---|
 | `$model` | `opus`, `sonnet`, `haiku`, `fable` (else the model id), from the Claude session's transcript |
 | `$gitstatus` | `clean`, `dirty`, `ahead`, `behind`, `diverged`, `conflict` (the pane's folder; nothing outside a repo) |
-| `$usage` | context used, a bare number 0-100 (so herdr's `gt`/`lt` rules can colour it; `{usage_pct}` in the label adds `%`), from `~/.local/state/claude-ctx/<session>` (remaining %, written by a Claude status line) |
+| `$usage` | **Claude Code only**: context used, a bare number 0-100 (so herdr's `gt`/`lt` rules can colour it; `{usage_pct}` in the label adds `%`), from `~/.local/state/claude-ctx/<session>` (remaining %, written by a Claude status line) |
 
     python3 queues.py badge gitstatus dirty ±   # an emoji or symbol instead of the word (no third argument clears)
     python3 queues.py badge model opus 🟣
 
-Future scope: animated working spinners.
+**Combining tokens without separators:** herdr puts ` · ` between a row's tokens, so put badges in the label template
+instead; any token works there by name:
+
+    python3 queues.py badge gitstatus dirty ±
+    python3 queues.py badge model opus 🟣
+    python3 queues.py label '{queue}{machine} {workspace} {model}{gitstatus}'   # 🔥🐭 station-maintenance 🟣±
+
 
 Its layout is yours, synced to every machine like the queues:
 

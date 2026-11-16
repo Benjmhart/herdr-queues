@@ -1,4 +1,4 @@
-"""python3 test_queues.py: headings, collapse, sort modes' labels, colours, git state, badges (no herdr needed)."""
+"""python3 test_queues.py: headings, collapse, sort modes' labels, colours, marks and indent, git state, badges (no herdr needed)."""
 import importlib.util, os, subprocess, sys, tempfile, tomllib
 
 sys.argv = ["x"]
@@ -20,8 +20,17 @@ st["sort"] = "workspaces"; t = tok(st)  # off: plain names, no headings
 assert t["p2"]["queues_heading"] is None and t["p2"]["queues_label"] == "b"
 st.update(sort="auto", headings="machine", collapsed=[]); t = tok(st)
 assert t["p1"]["queues_heading"] == "🐭 micro" and t["p2"]["queues_heading"] is None
-st.update(colors={"priority": "#ff5555"}); r = q.rows_toml(st)
-assert 'contains = "🔥", fg = "#ff5555"' in r; tomllib.loads(r)
+assert q.setting(st, "color", ["priority", "#ff5555"]) and not q.setting(st, "color", ["priority", "red"])
+r = q.rows_toml(st); tomllib.loads(r); assert "$queues_heading_after" not in r and "state_icon" in r
+st.update(mark="own", headings="queue", sort="queues", spinner=True); r = q.rows_toml(st); tomllib.loads(r)
+assert "$queues_heading_after" in r and "state_icon" not in r
+t = tok(st)  # own marks: heading above the first agent only, later headings ride on the previous agent's 3rd row
+P, W = q.PAD, q.WJ
+assert t["p1"]["queues_heading"] == P * 2 + "▾ 🔥 priority" + W  # red = palette slot 1
+assert t["p1"]["queues_label"] == P + q.SPIN[0] + " 🔥🐭 a" + W  # working: the spinner's first frame
+assert t["p2"]["queues_label"] == P * 3 + "⚠ 🔥🐭 b" + W and t["p2"]["queues_heading_after"] == "▾ work"
+assert t["p3"]["queues_label"] == P * 3 + "○ work🐭 c" and t["p3"]["queues_heading"] is None
+assert not q.setting(st, "host", ["micro", "icon", "🦊"]); t = tok(st); assert "🦊" in t["p1"]["queues_label"]
 d = tempfile.mkdtemp(); subprocess.run(["git", "-C", d, "init", "-q"])
 assert q.git_of(d) == "clean"; open(d + "/f", "w").write("x"); assert q.git_of(d) == "dirty"; assert q.git_of("/") is None
 st["badges"] = {"gitstatus": {"dirty": "±"}}; assert q.info({"cwd": d}, st)["gitstatus"] == "±"
