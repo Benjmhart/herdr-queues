@@ -609,10 +609,21 @@ def asks(sid):
     return False
 
 
+# A request without a "?" (confluence-consist 2026-11-16: "Reply with pass or fail for each check."): a phrase that asks
+# wherever it stands, or a sentence that opens by asking you to do something.
+ASK = re.compile(r"\b(?:tell me|let me know|reply with|send me|your call)\b|(?:^|[.!:]\s+|\n\s*(?:[-*]|\d+\.)?\s*)"
+                 r"(?:(?:then|now|please|so),?\s+)*(?:reply|run|confirm|choose|pick|approve|paste|answer|decide|type)\b", re.I)
+CODE = re.compile(r"^(?:```|    |\t)")
+
+
 def asks_text(text):
-    """The last paragraph of a reply asks something."""
-    last = [p for p in text.strip().split("\n\n") if p.strip()][-1:] or [""]
-    return "?" in last[0]
+    """The last paragraph of a reply asks something: a question, or a request to you. A command block at the end (an
+    agent's "Run:" followed by the command) is skipped for the prose before it."""
+    paras = [p for p in re.split(r"\n\s*\n", text.strip()) if p.strip()]
+    while len(paras) > 1 and CODE.match(paras[-1]):
+        paras.pop()
+    last = paras[-1] if paras else ""
+    return "?" in last or bool(ASK.search(last))
 
 
 BG = re.compile(r"· \d+ (shells?|background tasks?)\b")
@@ -626,7 +637,6 @@ def background(pane):
         return False
 
 
-RANK = {"blocked": 0, "done": 1, "idle": 2, "working": 3}
 ON = ("queues", "auto")  # the queue sidebar's modes (`s`): static queue order, or re-sorted every minute
 
 
@@ -926,7 +936,9 @@ SPIN = ["\uee06", "\uee07", "\uee08", "\uee09", "\uee0a", "\uee0b"]
 # Each mark may colour its row: a herdr rule colours a whole token, so a coloured spinner means a coloured row. Palette
 # names (the label's invisible marker), so no config change. `queues.py status NAME color COLOUR|none`.
 MARK_COLOURS = {"blocked": "red", "done": "green", "working": "yellow"}
-NEED = {"blocked": 0, "asks": 1, "done": 2, "asks_seen": 3, "background": 4, "done_seen": 5, "idle": 5, "working": 6}
+# auto sort (Ben 2026-11-16): stuck on you first, then finished and not yet looked at, then working (its own background
+# shell counts), idle last; a question or a finish you have looked at is idle.
+NEED = {"blocked": 0, "asks": 1, "done": 2, "working": 3, "background": 3, "asks_seen": 4, "done_seen": 4, "idle": 4}
 
 
 def need(a):

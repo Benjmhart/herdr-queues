@@ -79,3 +79,10 @@ assert not q.setting(st4, "status", ["spin", "a", "b"]) and q.spin_frames(st4) =
 assert not q.setting(st4, "status", ["working", "color", "none"]) and q.mark_colour(st4, "working") is None
 assert not q.setting(st4, "status", ["done", "default"]) and q.marks(st4)["done"] == "✔"
 print("ok")
+# a request without a question mark is still an ask (confluence-consist 2026-11-16); a report is not
+assert q.asks_text("Done.\n\nReply with pass or fail for each check.") and q.asks_text("Steps.\n\nThen run `$OPS/x.sh` and tell me what it prints.")
+assert q.asks_text("All set.\n\nPlease run:\n\n    $OPS/a.sh") and q.asks_text("Fix ready.\n\nRun:\n\n```\n$OPS/a.sh\n```")
+assert not q.asks_text("Pushed `abc123`.\n\nThe tests pass and the run finished.") and not q.asks_text("Ran the suite; it passed.")
+# auto order (Ben 2026-11-16): blocked, unseen done, working, idle; a seen done is idle
+assert q.NEED["blocked"] < q.NEED["done"] < q.NEED["working"] < q.NEED["idle"] == q.NEED["done_seen"] == q.NEED["asks_seen"]
+print("ok")
