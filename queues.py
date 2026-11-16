@@ -896,7 +896,9 @@ def hiding(state, agents):
         return {TOKEN: "1" if a["pane_id"] in hidden else None, "queues_queue": qi, "queues_label": body,
                 "queues_heading": above.get(a["pane_id"]), "queues_heading_after": None}  # retired 2026-11-16; cleared
     reqs = [["pane.report_metadata", {"pane_id": a["pane_id"], "source": SOURCE, "tokens": tokens(a)}] for a in agents]
-    return reqs + [["agent.view.set", VIEW] if hidden else ["agent.view.clear", {"source": SOURCE}]]
+    # Always set: the viewing client's server filters every machine's list, so a server with nothing of its own to
+    # hide clearing it brought back other machines' hidden agents (Ben 2026-11-16, micro after a refresh).
+    return reqs + [["agent.view.set", VIEW]]
 
 
 def resort(state, agents, ms):
