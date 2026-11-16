@@ -9,6 +9,8 @@ each with one line of what it needs. Enter jumps to the agent, switching the her
   queues.py jump M P     switch the herdr window to machine M and focus pane P
   queues.py icon Q [E]   icon E for queue Q in herdr's sidebar ($queues_queue); no E clears it
   queues.py refresh      this machine's sidebar tokens now (herdr runs it on rename and new agents)
+  queues.py color K [#h] colour for queue or host K;  colorby queue|machine;  headings queue|machine|off
+  queues.py collapse Q   collapse/open queue Q;  badge model|gitstatus VALUE [EMOJI];  rows: herdr config for these
   queues.py label [F]    the sidebar's $queues_label template, e.g. "{queue}{machine} {workspace} {folder}" (any pane
                          token by name); "default" resets
 
@@ -458,7 +460,7 @@ def icon(state, name):
 # A field the pane doesn't have is empty; empty fields drop out with their spaces.
 LABEL = "{queue}{machine} {workspace}"
 PLAIN = "{workspace}"
-FIELDS = ("queue", "machine", "workspace", "host", "agent", "title")
+FIELDS = ("queue", "machine", "workspace", "host", "agent", "title", "model", "gitstatus", "usage", "usage_pct")
 
 
 class Blank(dict):
@@ -470,7 +472,8 @@ def label(a, qi, fmt=LABEL):
     toks = {k: v for k, v in (a.get("tokens") or {}).items() if k != "queues_label"}  # not itself
     f = Blank(toks, queue=qi or "", machine=toks.get("machine_icon") or "",
               workspace=a.get("workspace") or a.get("workspace_id", ""), host=a.get("host", ""),
-              agent=a.get("agent", ""), title=a.get("terminal_title_stripped", ""))
+              agent=a.get("agent", ""), title=a.get("terminal_title_stripped", ""),
+              usage_pct=f"{toks['usage']}%" if toks.get("usage") else "")
     try:
         out = fmt.format_map(f)
     except (ValueError, IndexError, AttributeError):  # a broken format shows the default, not nothing
@@ -478,29 +481,145 @@ def label(a, qi, fmt=LABEL):
     return " ".join(out.split())
 
 
+# --- info tokens (Ben 2026-11-15): $model, $gitstatus, $usage, each a small predictable set of values, written on the
+# agent's own machine by `refresh` (herdr runs it as agents change). `queues.py badge TOKEN VALUE EMOJI` shows an emoji
+# instead of a value. $usage is a bare number, so herdr's gt/lt rules can colour it; {usage_pct} in the label adds "%".
+INFO = SOURCE + "-info"
+MODELS = ("opus", "sonnet", "haiku", "fable")
+
+
+def model_of(sid):
+    """opus, sonnet, haiku, fable (or the raw id): the newest model in the Claude session's transcript."""
+    import glob
+    for path in glob.glob(os.path.expanduser(f"~/.claude/projects/*/{sid}.jsonl")):
+        with open(path, "rb") as fh:
+            fh.seek(max(0, os.path.getsize(path) - 262144))
+            found = re.findall(rb'"model":"([^"]+)"', fh.read())
+        if found:
+            m = found[-1].decode()
+            return next((f for f in MODELS if f in m), m)
+    return None
+
+
+def git_of(cwd):
+    """clean, dirty, ahead, behind, diverged, conflict; None outside a repository."""
+    try:
+        r = subprocess.run(["git", "-C", cwd, "status", "--porcelain=v2", "--branch"], capture_output=True, text=True,
+                           timeout=3)
+    except (OSError, subprocess.TimeoutExpired, TypeError):
+        return None
+    if r.returncode:
+        return None
+    lines = r.stdout.splitlines()
+    if any(ln.startswith("u ") for ln in lines):
+        return "conflict"
+    ab = next((ln.split()[2:4] for ln in lines if ln.startswith("# branch.ab ")), ["+0", "-0"])
+    ahead, behind = ab[0] != "+0", ab[1] != "-0"
+    if ahead and behind:
+        return "diverged"
+    if any(not ln.startswith("#") for ln in lines):
+        return "dirty"
+    return "ahead" if ahead else "behind" if behind else "clean"
+
+
+def usage_of(sid):
+    """Context used, 0-100, from ~/.local/state/claude-ctx/<session> (remaining %, written by a Claude status line)."""
+    try:
+        with open(os.path.expanduser(f"~/.local/state/claude-ctx/{sid}")) as fh:
+            return str(round(100 - float(fh.read().strip())))
+    except (OSError, ValueError):
+        return None
+
+
+def info(a, state):
+    sid = (a.get("agent_session") or {}).get("value")
+    raw = {"model": model_of(sid) if sid else None, "gitstatus": git_of(a.get("foreground_cwd") or a.get("cwd")),
+           "usage": usage_of(sid) if sid else None}
+    b = state.get("badges", {})
+    return {k: (v if k == "usage" else b.get(k, {}).get(v, v)) if v else None for k, v in raw.items()}
+
+
+RANK = {"blocked": 0, "done": 1, "idle": 2, "working": 3}
+ON = ("queues", "auto")  # the queue sidebar's modes (`s`): static queue order, or re-sorted every minute
+
+
+def machine_icons():
+    path = os.path.expanduser("~/.config/herdr/plugins/config/benjmhart.machine-icons/icons")
+    try:
+        return dict(ln.split()[:2] for ln in open(path, encoding="utf-8") if len(ln.split()) >= 2 and ln[0] != "#")
+    except OSError:
+        return {}
+
+
+def rows_toml(state):
+    """Colours are herdr rules on the label's text (the only way herdr colours a token by value): `contains` the queue's
+    icon, or the machine's. A queue without an icon is matched by its name, which a workspace name can contain too."""
+    colors = state.get("colors", {})
+    if state.get("colorby") == "machine":
+        icons = machine_icons()
+        pairs = [(icons.get(h, h), c) for h, c in colors.items() if h not in state["queues"]]
+    else:
+        pairs = [(icon(state, q), colors[q]) for q in state["queues"] if q in colors]
+    rules = ", ".join(f'{{ contains = {json.dumps(n, ensure_ascii=False)}, fg = "{c}" }}' for n, c in pairs[:16])
+    r = f", rules = [{rules}]" if rules else ""
+    return ("[ui.sidebar.agents]\nrows = [\n"
+            f'  [{{ token = "$queues_heading", bold = true{r} }}],\n'
+            f'  ["state_icon", {{ token = "$queues_label"{r} }}],\n]')
+
+
 def hiding(state, agents):
-    """One machine's requests: each agent's tokens (inactive, queue), then the view (cleared when nothing is inactive)."""
+    """One machine's requests: each agent's tokens (hidden, queue, label, heading), then the view. agents in sidebar order.
+    Hidden: inactive, or in a collapsed queue and not its most urgent agent (that one carries the queue: "+N")."""
+    on = state.get("sort") in ON
+    fmt = (state.get("label") or LABEL) if on else PLAIN
+    collapsed, heads = set(state.get("collapsed", [])), state.get("headings") if on else None
+    live = [a for a in agents if not inactive(state, a)]
+    carrier, extra = {}, {}
+    for q in collapsed:
+        ms = [a for a in live if queue_of(state, a) == q]
+        if ms:
+            c = min(ms, key=lambda a: (RANK.get(a.get("agent_status"), 4), live.index(a)))
+            carrier[q], extra[q] = c["pane_id"], len(ms) - 1
+    hidden = {a["pane_id"] for a in live if queue_of(state, a) in carrier and carrier[queue_of(state, a)] != a["pane_id"]}
+    hidden |= {a["pane_id"] for a in agents if inactive(state, a)}
+    heading, last = {}, object()
+    for a in live:  # a heading on the first shown agent of each run: queue (▾ open, ▸ collapsed) or machine
+        if a["pane_id"] in hidden or not heads:
+            continue
+        q = queue_of(state, a)
+        key = q if heads == "queue" else a.get("host")
+        if key != last:
+            if heads == "queue":
+                qi = icon(state, q) if q != UNSORTED else ""
+                name = f"{qi} {q}" if qi and qi != q else q
+                heading[a["pane_id"]] = (f"▸ {name} +{extra[q]}" if q in carrier and extra[q] else
+                                         f"▸ {name}" if q in carrier else f"▾ {name}")
+            else:
+                heading[a["pane_id"]] = f"{(a.get('tokens') or {}).get('machine_icon') or ''} {a.get('host', '')}".strip()
+            last = key
+
     def tokens(a):
         q = queue_of(state, a)
         qi = None if q == UNSORTED else icon(state, q)
-        return {TOKEN: "1" if inactive(state, a) else None, "queues_queue": qi, "queues_label": label(a, qi, fmt)}
-    # The queue sidebar is opt-in, with `s` (Ben 2026-11-15): on, $queues_label is your template; off, only the
-    # workspace name, so a row built on it still reads like herdr's own. Rows without $queues_label never change.
-    fmt = (state.get("label") or LABEL) if state.get("sort") == "queues" else PLAIN
+        return {TOKEN: "1" if a["pane_id"] in hidden else None, "queues_queue": qi,
+                "queues_label": label(a, qi, fmt), "queues_heading": heading.get(a["pane_id"])}
     reqs = [["pane.report_metadata", {"pane_id": a["pane_id"], "source": SOURCE, "tokens": tokens(a)}] for a in agents]
-    return reqs + [["agent.view.set", VIEW] if state.get("inactive") else ["agent.view.clear", {"source": SOURCE}]]
+    return reqs + [["agent.view.set", VIEW] if hidden else ["agent.view.clear", {"source": SOURCE}]]
 
 
 def resort(state, agents, ms):
     """Flip the sidebar on every machine; returns a message. Mutates state (save it after)."""
-    to_queues = state.get("sort") != "queues"
+    mode = state.get("sort") if state.get("sort") in ON else "workspaces"
+    nxt = {"workspaces": "queues", "queues": "auto", "auto": "workspaces"}[mode]
+    to_queues = nxt in ON
     saved = state.setdefault("order", {})
     done, skipped = [], []
     for label, (host, target) in ms.items():
         try:
             ids = workspace_ids(label)
-            if to_queues:
+            if to_queues and mode == "workspaces":
                 saved[host] = ids  # your order, as it is now
+            if to_queues:
                 order = by_queues(state, [a for a in agents if a.get("host") == host], ids)
             else:
                 order = restored(saved.get(host, ids), ids)
@@ -509,8 +628,10 @@ def resort(state, agents, ms):
             done.append(host)
         except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError):
             skipped.append(host)
-    state["sort"] = "queues" if to_queues else "workspaces"
-    return (f"sidebar: {'queue' if to_queues else 'your workspace'} order on {len(done)} machine(s)"
+    state["sort"] = nxt
+    what = {"queues": "queue order (static)", "auto": "queue order, waiting agents float up (every minute)",
+            "workspaces": "your workspace order, plain labels"}[nxt]
+    return (f"sidebar: {what} on {len(done)} machine(s)"
             + (f"; not reached: {', '.join(skipped)}" if skipped else ""))
 
 
@@ -794,9 +915,16 @@ def nag(ms, notify=True):
                 for a in listed:
                     a["host"] = ms[m][0]
                     a["workspace"] = wsn.get(a.get("workspace_id"), a.get("workspace_id"))
+                ids = list(wsn)
+                listed.sort(key=lambda a: ids.index(a["workspace_id"]) if a.get("workspace_id") in ids else len(ids))
                 try:
+                    if state.get("sort") == "auto":  # waiting agents float up within their queue (Ben 2026-11-15)
+                        order = by_queues(state, listed, ids)
+                        if order != ids:
+                            apply_order(m, ms[m][1], order)
+                            listed.sort(key=lambda a: order.index(a["workspace_id"]) if a.get("workspace_id") in order else len(order))
                     call(ms[m][1], hiding(state, listed))
-                except (OSError, subprocess.SubprocessError):
+                except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
                     pass
                 for a in listed:
                     if not notify or inactive(state, a) or quiet(state, a):  # put aside on purpose: no reminders
@@ -825,10 +953,10 @@ def nag(ms, notify=True):
 # --- the list ---------------------------------------------------------------------------------------------------
 
 HELP = ("←→/h l/tab queue · ↑↓/j k pgup pgdn g G · enter: go to agent · m: move to queue · 1-9: move to that queue · a: waiting only/all\n"
-        "J/K: move down/up in the queue · i: inactive (off herdr's sidebar, sinks to the bottom) · b: alerts on/off\nqueues: n new · r rename · d delete · </> reorder · s: queue sidebar on/off (order + labels) · q quit")
+        "J/K: move down/up in the queue · i: inactive (off herdr's sidebar, sinks to the bottom) · b: alerts on/off\nqueues: n new · r rename · d delete · </> reorder · s: sidebar: your order / queues / queues, waiting first · c: collapse queue · q quit")
 # The mouse (Ben 2026-11-14: "clickable buttons and scrolling of the agent list for mouse users"): each button sends its
 # key. Click a tab to open it, a line to select it, the selected line again to go to it; the wheel scrolls.
-BUTTONS = [("go", "enter"), ("▲", "K"), ("▼", "J"), ("move", "m"), ("waiting/all", "a"), ("inactive", "i"), ("alerts", "b"), ("sort", "s"),
+BUTTONS = [("go", "enter"), ("▲", "K"), ("▼", "J"), ("move", "m"), ("waiting/all", "a"), ("inactive", "i"), ("alerts", "b"), ("sort", "s"), ("collapse", "c"),
            ("new", "n"), ("rename", "r"), ("delete", "d"), ("<", "<"), (">", ">"), ("quit", "q")]
 WHEEL_UP = getattr(curses, "BUTTON4_PRESSED", 0)
 WHEEL_DOWN = getattr(curses, "BUTTON5_PRESSED", 0x200000)  # ncurses 6; older Pythons lack the name
@@ -1140,6 +1268,13 @@ def ui(scr):
             sel = len(q) - 1
         elif c == "a":
             everyone = not everyone
+        elif c == "c":  # collapse / open this queue in herdr's sidebar
+            name = qs[cur or 0]
+            state["collapsed"] = sorted(set(state.get("collapsed", [])) ^ {name})
+            save(state)
+            for a in {a["machine"]: a for a in agents}.values():
+                retoken(state, agents, a, ms)
+            msg = f"{name}: {'collapsed' if name in state['collapsed'] else 'open'} in the sidebar"
         elif c == "i" and q:
             on = not inactive(state, q[sel])
             set_inactive(state, q[sel], on)
@@ -1222,15 +1357,47 @@ def main(cmd):
             state.get("icons", {}).pop(name, None)
         save(state)
         print(json.dumps(state.get("icons", {}), ensure_ascii=False))
-    elif cmd == "refresh":  # herdr runs it when an agent appears or a workspace is renamed: this machine's labels now
+    elif cmd == "refresh":  # herdr runs it on agent changes and renames: this machine's tokens now
         if os.path.exists(STATE):
             time.sleep(1)  # herdr-machine-icons runs on the same event: let its icon land first
+            state = load()
             listed = json.loads(herdr(None, "agent", "list"))["result"]["agents"]
             ws = json.loads(herdr(None, "workspace", "list"))["result"]["workspaces"]
             wsn = {w["workspace_id"]: w.get("label") or w["workspace_id"] for w in ws}
+            ids = list(wsn)
+            listed.sort(key=lambda a: ids.index(a["workspace_id"]) if a.get("workspace_id") in ids else len(ids))
+            reqs = []
             for a in listed:
                 a["host"], a["workspace"] = socket.gethostname(), wsn.get(a.get("workspace_id"), a.get("workspace_id"))
-            call(None, hiding(load(), listed))
+                t = info(a, state)
+                reqs.append(["pane.report_metadata", {"pane_id": a["pane_id"], "source": INFO, "tokens": t}])
+                a["tokens"] = {**(a.get("tokens") or {}), **{k: v for k, v in t.items() if v}}
+            call(None, reqs + hiding(state, listed))
+    elif cmd in ("color", "colorby", "headings", "collapse", "badge"):
+        state, args = load(), sys.argv[2:]
+        if cmd == "color" and args:  # color KEY [#hex]: KEY is a queue or a host; no hex clears
+            if len(args) > 1 and not re.fullmatch(r"#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})", args[1]):
+                sys.exit("herdr-queues: colours are #RGB or #RRGGBB (herdr's rule)")
+            c = state.setdefault("colors", {})
+            c.update({args[0]: args[1]}) if len(args) > 1 else c.pop(args[0], None)
+        elif cmd == "colorby" and args and args[0] in ("queue", "machine"):
+            state["colorby"] = args[0]
+        elif cmd == "headings" and args and args[0] in ("queue", "machine", "off"):
+            state["headings"] = None if args[0] == "off" else args[0]
+        elif cmd == "collapse" and args:
+            c = set(state.get("collapsed", []))
+            state["collapsed"] = sorted(c ^ {args[0]})
+        elif cmd == "badge" and len(args) >= 2 and args[0] in ("model", "gitstatus"):
+            b = state.setdefault("badges", {}).setdefault(args[0], {})
+            b.update({args[1]: args[2]}) if len(args) > 2 else b.pop(args[1], None)
+        elif args:
+            sys.exit(__doc__)
+        if args:
+            save(state)
+        print(json.dumps({k: state.get(k) for k in ("colors", "colorby", "headings", "collapsed", "badges")},
+                         ensure_ascii=False))
+    elif cmd == "rows":  # herdr's [ui.sidebar.agents] for these colours and headings: paste into config.toml
+        print(rows_toml(load()))
     elif cmd == "label":  # queues.py label [FORMAT|default]: the sidebar's $queues_label; no argument shows it
         state = load()
         if len(sys.argv) > 2:

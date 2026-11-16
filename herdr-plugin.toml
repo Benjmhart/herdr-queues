@@ -1,6 +1,6 @@
 id = "benjmhart.queues"
 name = "Queues"
-version = "0.17.0"
+version = "0.18.0"
 min_herdr_version = "0.9.3"
 description = "Your own queues (personal, work, ...) of the agents waiting on you, on every machine; Enter jumps there"
 platforms = ["linux", "macos"]
@@ -9,6 +9,10 @@ platforms = ["linux", "macos"]
 # icon, which lands with the agent).
 [[events]]
 on = "pane.agent_detected"
+command = ["python3", "queues.py", "refresh"]
+
+[[events]]
+on = "pane.agent_status_changed"
 command = ["python3", "queues.py", "refresh"]
 
 [[events]]

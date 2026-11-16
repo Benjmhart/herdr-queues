@@ -133,9 +133,38 @@ renamed workspace shows within one.
 rows = [["state_icon", "$queues_label"]]
 ```
 
-**Opt-in: press `s` in the popup** (the queue sidebar: queue order and these labels). Off, `$queues_label` is only the
-workspace name, so a row built on it still reads like herdr's own; a row without `$queues_label` is never touched, so
-other plugins or herdr's defaults keep the sidebar.
+**Opt-in: `s` in the popup cycles the sidebar:** your own workspace order (plain labels) → queue order, static →
+queue order, automatic (every minute, blocked and finished agents float to the top of their queue). Off, `$queues_label`
+is only the workspace name, so a row built on it still reads like herdr's own; a row without `$queues_label` is never
+touched, so other plugins or herdr's defaults keep the sidebar.
+
+### Headings, collapsing, colours
+
+    python3 queues.py headings queue      # a heading over each queue (or: machine, off): $queues_heading
+    python3 queues.py collapse work       # collapse/open a queue (or `c` in the popup): one row, "▸ work +3"
+    python3 queues.py color priority '#ff5555'   # by queue (or host: color beast-arch '#bd93f9')
+    python3 queues.py colorby queue       # or machine
+    python3 queues.py rows                # prints herdr's [ui.sidebar.agents] for these: paste into config.toml
+
+A collapsed queue keeps one row: its most urgent agent (blocked, then finished), under `▸ name +N`. Colours are herdr
+rules on the label's text (`contains` the queue's or the machine's icon), so give coloured queues an icon; re-run
+`rows` after changing colours. herdr indents an entry's second row, so the first agent under a heading sits two
+columns in.
+
+### Info tokens
+
+Written on each agent's machine as it changes, for rows or the label template:
+
+| Token | Values |
+|---|---|
+| `$model` | `opus`, `sonnet`, `haiku`, `fable` (else the model id), from the Claude session's transcript |
+| `$gitstatus` | `clean`, `dirty`, `ahead`, `behind`, `diverged`, `conflict` (the pane's folder; nothing outside a repo) |
+| `$usage` | context used, a bare number 0-100 (so herdr's `gt`/`lt` rules can colour it; `{usage_pct}` in the label adds `%`), from `~/.local/state/claude-ctx/<session>` (remaining %, written by a Claude status line) |
+
+    python3 queues.py badge gitstatus dirty ±   # an emoji or symbol instead of the word (no third argument clears)
+    python3 queues.py badge model opus 🟣
+
+Future scope: animated working spinners.
 
 Its layout is yours, synced to every machine like the queues:
 
@@ -146,7 +175,7 @@ Its layout is yours, synced to every machine like the queues:
 It is a template. Fields: `{queue}` (icon, or name when it has none; empty while unsorted), `{machine}`
 (`$machine_icon`), `{workspace}`, `{host}`, `{agent}` (claude, codex, ...), `{title}` (the pane's terminal title), and
 **every token on the agent's pane by name**: `{folder}`, `{fold}`, any plugin's. A field the pane doesn't have is empty;
-an empty field drops out with its spaces. A new agent or a renamed workspace shows at once (herdr runs `queues.py refresh`); `s`, a new template or a
+an empty field drops out with its spaces. A new agent, a status change or a renamed workspace shows at once (herdr runs `queues.py refresh`); `s`, a new template or a
 queue change shows within the watcher's minute. The watcher follows a plugin update by itself.
 
 The watcher keeps the tokens up on every machine it reaches (once a minute); a move in the popup updates them at once.
