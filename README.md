@@ -188,8 +188,8 @@ emoji or headings (colours are an invisible marker in the text, matched by fixed
 **Status marks.** With `mark herdr` the row starts with herdr's own `state_icon`. herdr can't pad before it and indents
 an entry's second line by two, so the first agent under a heading sits two columns right of the rest. With `mark own`
 the plugin draws the mark as coloured emoji: 🔴 blocked on an approval or question dialog (its name red too); ❓ stopped
-on a question to you, ❔ once you have looked at it; ✅ finished, ✓ once you have looked at it; ⏳ stopped but running
-its own background shell (nothing needed from you); 🕐 working, or a clock spinner; nothing when idle.
+on a question to you, ❔ once you have looked at it; ✔ finished (its row green), ✓ once you have looked at it; ⏳ stopped but running
+its own background shell (nothing needed from you); 🌍 working, or a turning globe 🌍🌎🌏; nothing when idle.
 "A question" is read from a Claude session's transcript (its last reply ends a paragraph with `?`), background work
 from Claude Code's footer (`· 1 shell`), and "looked at" is focusing the agent since it stopped (herdr's own seen
 state is per client) and pads it, so every

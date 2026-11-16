@@ -897,9 +897,11 @@ WJ, PAD = "\u2060", "\u2800"
 # 2026-11-16: status icons "brighter and colored", and a coloured spinner).
 # Ben 2026-11-16: idle should not catch the eye (blank), a checked agent dims, a question differs from "job done",
 # and an agent waiting on its own shell or subagent needs nothing from you. Width-1 marks are padded to two.
-MARKS = {"blocked": "🔴", "asks": "❓", "asks_seen": "❔", "done": "✅", "done_seen": "✓", "background": "⏳",
-         "idle": PAD * 2, "working": "🕐", "unknown": "·"}
-SPIN = "🕐🕑🕒🕓🕔🕕🕖🕗🕘🕙🕚🕛"  # clock faces: light on a dark background (the new moon was invisible)
+# Done: one check shape, green until seen (Ben: "the same as the grey checkbox but green"): no emoji is a bare green
+# check, so ✔ (text, unlike ✅) turns its row green by rule, as 🔴 turns a blocked row red.
+MARKS = {"blocked": "🔴", "asks": "❓", "asks_seen": "❔", "done": "✔", "done_seen": "✓", "background": "⏳",
+         "idle": PAD * 2, "working": "🌍", "unknown": "·"}
+SPIN = "🌍🌎🌏"  # a turning globe: coloured and light on a dark background (moons: the new moon vanished; clocks: no)
 NEED = {"blocked": 0, "asks": 1, "done": 2, "asks_seen": 3, "background": 4, "done_seen": 5, "idle": 5, "working": 6}
 
 
@@ -940,6 +942,7 @@ def rows_toml(state):
     if state.get("mark") == "own":
         # an unstyled token is herdr's dim comment grey: names get the bright text colour (Ben 2026-11-16)
         lab = ('{ token = "$queues_label", fg = "#f8f8f2", rules = [{ contains = "' + MARKS["blocked"] + '", fg = "#ff5555", bold = true }, '
+               '{ contains = "' + MARKS["done"] + '", fg = "#50fa7b" }, '
                + ", ".join(slots) + "] }")
         rows = [f"  [{head}],", f"  [{lab}],"]
     else:
