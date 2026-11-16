@@ -649,7 +649,7 @@ def setting(state, cmd, args):
         if len(args) < 2 or args[1] not in (*SIDEBAR_COLOURS, "none"):
             return f"color QUEUE {'|'.join(SIDEBAR_COLOURS)}|none"
         c = state.setdefault("colors", {})
-        c.pop(args[0], None) if args[1] == "none" else c.update({args[0]: args[1]})
+        c[args[0]] = None if args[1] == "none" else args[1]  # None: no colour (absent: the default)
     elif cmd == "host":  # host HOST icon EMOJI|none, host HOST color NAME|none
         if len(args) < 3 or args[1] not in ("icon", "color") or (args[1] == "color" and args[2] not in (*SIDEBAR_COLOURS, "none")):
             return f"host HOST icon EMOJI|none  or  host HOST color {'|'.join(SIDEBAR_COLOURS)}|none"
@@ -791,7 +791,7 @@ def entries_sync(state, listed):
             if q not in groups:
                 herdr(None, "workspace", "close", have.pop(q)["workspace_id"])
         collapsed = set(state.get("collapsed", []))
-        colour = (lambda q: marker((state.get("colors") or {}).get(q))) if (state.get("colorby") or "queue") == "queue" \
+        colour = (lambda q: marker(queue_colour(state, q))) if (state.get("colorby") or "queue") == "queue" \
             else (lambda q: "")
         for h in have.values():
             if h.get("agent") != HEAD_AGENT or h.get("status") != "unknown":  # "·": herdr's quietest state_icon
@@ -974,6 +974,16 @@ def mark_of(a, spin, state=None):
     return m if sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in m) >= 2 else m + " "
 
 
+# A queue with no colour set takes one by its place in the list, so a new queue matches the theme (first, the
+# priority queue: red). ponytail: reordering queues reorders the defaults; set a colour to pin it.
+QUEUE_DEFAULTS = ("red", "green", "cyan", "purple", "orange", "pink", "yellow")
+
+
+def queue_colour(state, q):
+    c, qs = state.get("colors") or {}, state.get("queues") or []
+    return c[q] if q in c else QUEUE_DEFAULTS[qs.index(q) % len(QUEUE_DEFAULTS)] if q in qs else None
+
+
 def marker(colour):
     return WJ * (list(SIDEBAR_COLOURS).index(colour) + 1) if colour in SIDEBAR_COLOURS else ""
 
@@ -1019,7 +1029,7 @@ def hiding(state, agents, host=HOST):
     hidden |= {a["pane_id"] for a in agents if inactive(state, a)}
     if entries:  # one list for every machine: a carrier on each would leave several under the heading
         hidden |= {a["pane_id"] for a in live if queue_of(state, a) in collapsed}
-    colour = lambda a: marker((state.get("colors") or {}).get(queue_of(state, a)) if by == "queue"
+    colour = lambda a: marker(queue_colour(state, queue_of(state, a)) if by == "queue"
                               else host_setting(state, a.get("host"), "color"))
     above, last = {}, object()
     for a in (a for a in live if a["pane_id"] not in hidden):
@@ -1819,7 +1829,7 @@ def settings(scr, state, ms):
             k, v = r
             if k == "queue":
                 qi = icon(state, v)
-                return (f"queue    {qi if qi != v else '·'} {v} · {(state.get('colors') or {}).get(v, 'no colour')}"
+                return (f"queue    {qi if qi != v else '·'} {v} · {queue_colour(state, v) or 'no colour'}"
                         + (" · collapsed" if v in state.get("collapsed", []) else ""))
             if k == "host":
                 return f"machine  {host_setting(state, v, 'icon') or '·'} {v} · {host_setting(state, v, 'color') or 'no colour'}"
@@ -1879,7 +1889,7 @@ def go(agent, ms):
 
 
 # Dracula, the fleet's palette (on 256 colours; plain ANSI otherwise). No A_DIM: unreadable on a translucent terminal.
-PALETTE = {"blocked": (210, 1), "done": (84, 2), "working": (228, 3), "idle": (103, 8), "machine": (141, 5),
+PALETTE = {"blocked": (203, 1), "done": (84, 2), "working": (228, 3), "idle": (103, 8), "machine": (141, 5),
            "workspace": (117, 6), "summary": (188, 7), "help": (103, 8), "tab": (236, 0), "tabbg": (141, 5),
            "select": (231, 7), "selectbg": (239, 4)}
 C = {}
@@ -1898,6 +1908,16 @@ def colours():
         try:
             curses.init_pair(n, pick(fg), -1 if bg == -1 else pick(bg))
             C[name] = curses.color_pair(n)
+        except curses.error:
+            pass
+    # each queue's tab: its colour on the background when current, as text otherwise
+    xterm = {"red": (203, 1), "orange": (215, 3), "yellow": (228, 3), "green": (84, 2), "cyan": (117, 6),
+             "purple": (141, 5), "pink": (212, 5), "grey": (61, 4)}
+    for n, (name, c) in enumerate(xterm.items(), len(pairs) + 1):
+        try:
+            curses.init_pair(n, c[0 if big else 1], -1)
+            curses.init_pair(n + len(xterm), PALETTE["tab"][0 if big else 1], c[0 if big else 1])
+            C["q:" + name], C["qbg:" + name] = curses.color_pair(n), curses.color_pair(n + len(xterm))
         except curses.error:
             pass
 
@@ -1962,7 +1982,9 @@ def ui(scr):
                 n = len(members(state, agents, s))
                 t = f" {s} {n} " if n else f" {s} "
                 hits.append((0, x, x + len(t), ("tab", i)))
-                x = put_str(scr, 0, x, t, (C.get("tab", curses.A_REVERSE) if i == (cur or 0) else 0)
+                qc = queue_colour(state, s)
+                x = put_str(scr, 0, x, t, (C.get(f"qbg:{qc}", C.get("tab", curses.A_REVERSE)) if i == (cur or 0)
+                                           else C.get(f"q:{qc}", 0))
                             | (curses.A_BOLD if n else 0)) + 1
             for i, ln in enumerate(HELP.splitlines()):  # (hl now counts the bar's extra lines too)
                 put_str(scr, 1 + i, 0, ln, C.get("help", 0))
