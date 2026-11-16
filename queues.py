@@ -456,6 +456,7 @@ def icon(state, name):
 # {fold}, any plugin's). herdr's rows can't do this: a row is a list of tokens joined by " · ", and "$a$b" is refused.
 # A field the pane doesn't have is empty; empty fields drop out with their spaces.
 LABEL = "{queue}{machine} {workspace}"
+PLAIN = "{workspace}"
 FIELDS = ("queue", "machine", "workspace", "host", "agent", "title")
 
 
@@ -481,7 +482,10 @@ def hiding(state, agents):
     def tokens(a):
         q = queue_of(state, a)
         qi = None if q == UNSORTED else icon(state, q)
-        return {TOKEN: "1" if inactive(state, a) else None, "queues_queue": qi, "queues_label": label(a, qi, state.get("label") or LABEL)}
+        return {TOKEN: "1" if inactive(state, a) else None, "queues_queue": qi, "queues_label": label(a, qi, fmt)}
+    # The queue sidebar is opt-in, with `s` (Ben 2026-11-15): on, $queues_label is your template; off, only the
+    # workspace name, so a row built on it still reads like herdr's own. Rows without $queues_label never change.
+    fmt = (state.get("label") or LABEL) if state.get("sort") == "queues" else PLAIN
     reqs = [["pane.report_metadata", {"pane_id": a["pane_id"], "source": SOURCE, "tokens": tokens(a)}] for a in agents]
     return reqs + [["agent.view.set", VIEW] if state.get("inactive") else ["agent.view.clear", {"source": SOURCE}]]
 
@@ -812,7 +816,7 @@ def nag(ms, notify=True):
 # --- the list ---------------------------------------------------------------------------------------------------
 
 HELP = ("←→/h l/tab queue · ↑↓/j k pgup pgdn g G · enter: go to agent · m: move to queue · 1-9: move to that queue · a: waiting only/all\n"
-        "J/K: move down/up in the queue · i: inactive (off herdr's sidebar, sinks to the bottom) · b: alerts on/off\nqueues: n new · r rename · d delete · </> reorder · s: sidebar by queues / your order · q quit")
+        "J/K: move down/up in the queue · i: inactive (off herdr's sidebar, sinks to the bottom) · b: alerts on/off\nqueues: n new · r rename · d delete · </> reorder · s: queue sidebar on/off (order + labels) · q quit")
 # The mouse (Ben 2026-11-14: "clickable buttons and scrolling of the agent list for mouse users"): each button sends its
 # key. Click a tab to open it, a line to select it, the selected line again to go to it; the wheel scrolls.
 BUTTONS = [("go", "enter"), ("▲", "K"), ("▼", "J"), ("move", "m"), ("waiting/all", "a"), ("inactive", "i"), ("alerts", "b"), ("sort", "s"),
@@ -1147,6 +1151,8 @@ def ui(scr):
             scr.refresh()
             msg = resort(state, agents, ms)
             save(state)
+            for a in {a["machine"]: a for a in agents}.values():  # the labels follow at once, not in the watcher's minute
+                retoken(state, agents, a, ms)
         elif c == "enter" and q:
             msg = go(q[sel], ms)
             if not msg:

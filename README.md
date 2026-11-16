@@ -133,6 +133,10 @@ renamed workspace shows within one.
 rows = [["state_icon", "$queues_label"]]
 ```
 
+**Opt-in: press `s` in the popup** (the queue sidebar: queue order and these labels). Off, `$queues_label` is only the
+workspace name, so a row built on it still reads like herdr's own; a row without `$queues_label` is never touched, so
+other plugins or herdr's defaults keep the sidebar.
+
 Its layout is yours, synced to every machine like the queues:
 
     python3 queues.py label                                  # show it: {queue}{machine} {workspace}
