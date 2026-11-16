@@ -359,7 +359,7 @@ def move(state, live, queue, agent, d, everyone=True):
 
 CALLS = r'''
 import json, os, socket, sys
-P = os.environ.get("HERDR_SOCKET_PATH") or os.path.expanduser("~/.config/herdr/herdr.sock")
+P = os.environ.get("HERDR_SOCKET_PATH") or os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "herdr/herdr.sock")
 for method, params in json.loads(sys.argv[1]):
     with socket.socket(socket.AF_UNIX) as s:
         s.connect(P)
@@ -445,11 +445,21 @@ def icon(state, name):
     return state.get("icons", {}).get(name, name)
 
 
+# queues_label: queue icon, machine icon, workspace name as ONE token, "🔥🐭 station-maintenance" (Ben 2026-11-15: no
+# divider between the emoji and the name). herdr puts " · " between a row's tokens (none after state_icon) and has no
+# setting for it, so the row is ["state_icon", "$queues_label"]. The machine icon is herdr-machine-icons' token on the
+# same pane; a workspace rename shows within the watcher's minute.
+def label(a, qi):
+    mi = (a.get("tokens") or {}).get("machine_icon") or ""
+    return f"{qi or ''}{mi} {a.get('workspace') or a.get('workspace_id', '')}".strip()
+
+
 def hiding(state, agents):
     """One machine's requests: each agent's tokens (inactive, queue), then the view (cleared when nothing is inactive)."""
     def tokens(a):
         q = queue_of(state, a)
-        return {TOKEN: "1" if inactive(state, a) else None, "queues_queue": None if q == UNSORTED else icon(state, q)}
+        qi = None if q == UNSORTED else icon(state, q)
+        return {TOKEN: "1" if inactive(state, a) else None, "queues_queue": qi, "queues_label": label(a, qi)}
     reqs = [["pane.report_metadata", {"pane_id": a["pane_id"], "source": SOURCE, "tokens": tokens(a)}] for a in agents]
     return reqs + [["agent.view.set", VIEW] if state.get("inactive") else ["agent.view.clear", {"source": SOURCE}]]
 
@@ -744,8 +754,11 @@ def nag(ms, notify=True):
         for m in ms:
             try:
                 listed = json.loads(herdr(m, "agent", "list", timeout=4))["result"]["agents"]
+                ws = json.loads(herdr(m, "workspace", "list", timeout=4))["result"]["workspaces"]
+                wsn = {w["workspace_id"]: w.get("label") or w["workspace_id"] for w in ws}
                 for a in listed:
                     a["host"] = ms[m][0]
+                    a["workspace"] = wsn.get(a.get("workspace_id"), a.get("workspace_id"))
                 try:
                     call(ms[m][1], hiding(state, listed))
                 except (OSError, subprocess.SubprocessError):

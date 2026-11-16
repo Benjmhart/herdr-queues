@@ -123,6 +123,15 @@ rows = [["state_icon", "$queues_queue", "workspace", "machine", "tab"]]
     python3 queues.py icon priority 🔥     # set; synced to every machine like the queues
     python3 queues.py icon priority        # clear: the name shows again
 
+herdr puts ` · ` between a row's tokens. For the icons and the name with no divider, use `$queues_label`: the queue's
+icon, the machine's icon ([herdr-machine-icons](https://github.com/Benjmhart/herdr-machine-icons)' `$machine_icon`, when
+installed) and the workspace name in one token, `🔥🐭 station-maintenance`. The watcher refreshes it every minute, so a
+renamed workspace shows within one.
+
+```toml
+rows = [["state_icon", "$queues_label", "tab"]]
+```
+
 The watcher keeps the tokens up on every machine it reaches (once a minute); a move in the popup updates them at once.
 herdr's agent list has no section headers, so the icon is the queue's mark.
 
