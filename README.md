@@ -129,8 +129,18 @@ installed) and the workspace name in one token, `🔥🐭 station-maintenance`. 
 renamed workspace shows within one.
 
 ```toml
-rows = [["state_icon", "$queues_label", "tab"]]
+rows = [["state_icon", "$queues_label"]]
 ```
+
+Its layout is yours, synced to every machine like the queues:
+
+    python3 queues.py label                                  # show it: {queue}{machine} {workspace}
+    python3 queues.py label '{machine} {workspace} {queue}'  # set it
+    python3 queues.py label default                          # back to the default
+
+Fields: `{queue}` (icon, or name when it has none; empty while unsorted), `{machine}` (`$machine_icon`), `{workspace}`,
+`{host}`, `{agent}` (claude, codex, ...), `{title}` (the pane's terminal title). An empty field drops out with its
+spaces. The sidebar follows within the watcher's minute.
 
 The watcher keeps the tokens up on every machine it reaches (once a minute); a move in the popup updates them at once.
 herdr's agent list has no section headers, so the icon is the queue's mark.

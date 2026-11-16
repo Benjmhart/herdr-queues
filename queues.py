@@ -8,6 +8,7 @@ each with one line of what it needs. Enter jumps to the agent, switching the her
   queues.py watch        run on the machine you sit at: carries out jumps asked for by a popup on any machine
   queues.py jump M P     switch the herdr window to machine M and focus pane P
   queues.py icon Q [E]   icon E for queue Q in herdr's sidebar ($queues_queue); no E clears it
+  queues.py label [F]    the sidebar's $queues_label layout, e.g. "{queue}{machine} {workspace}"; "default" resets
 
 Standard library only. Data loads in a background thread, so keys never wait on the network.
 """
@@ -449,9 +450,21 @@ def icon(state, name):
 # divider between the emoji and the name). herdr puts " · " between a row's tokens (none after state_icon) and has no
 # setting for it, so the row is ["state_icon", "$queues_label"]. The machine icon is herdr-machine-icons' token on the
 # same pane; a workspace rename shows within the watcher's minute.
-def label(a, qi):
-    mi = (a.get("tokens") or {}).get("machine_icon") or ""
-    return f"{qi or ''}{mi} {a.get('workspace') or a.get('workspace_id', '')}".strip()
+# Its layout is yours: `queues.py label FORMAT` (synced to every machine like the queues), fields {queue} {machine}
+# {workspace} {host} {agent} {title}; empty fields drop out with their spaces.
+LABEL = "{queue}{machine} {workspace}"
+FIELDS = ("queue", "machine", "workspace", "host", "agent", "title")
+
+
+def label(a, qi, fmt=LABEL):
+    f = {"queue": qi or "", "machine": (a.get("tokens") or {}).get("machine_icon") or "",
+         "workspace": a.get("workspace") or a.get("workspace_id", ""), "host": a.get("host", ""),
+         "agent": a.get("agent", ""), "title": a.get("terminal_title_stripped", "")}
+    try:
+        out = fmt.format_map(f)
+    except (KeyError, ValueError, IndexError):  # a bad format shows the default, not nothing
+        out = LABEL.format_map(f)
+    return " ".join(out.split())
 
 
 def hiding(state, agents):
@@ -459,7 +472,7 @@ def hiding(state, agents):
     def tokens(a):
         q = queue_of(state, a)
         qi = None if q == UNSORTED else icon(state, q)
-        return {TOKEN: "1" if inactive(state, a) else None, "queues_queue": qi, "queues_label": label(a, qi)}
+        return {TOKEN: "1" if inactive(state, a) else None, "queues_queue": qi, "queues_label": label(a, qi, state.get("label") or LABEL)}
     reqs = [["pane.report_metadata", {"pane_id": a["pane_id"], "source": SOURCE, "tokens": tokens(a)}] for a in agents]
     return reqs + [["agent.view.set", VIEW] if state.get("inactive") else ["agent.view.clear", {"source": SOURCE}]]
 
@@ -1185,6 +1198,20 @@ def main(cmd):
             state.get("icons", {}).pop(name, None)
         save(state)
         print(json.dumps(state.get("icons", {}), ensure_ascii=False))
+    elif cmd == "label":  # queues.py label [FORMAT|default]: the sidebar's $queues_label; no argument shows it
+        state = load()
+        if len(sys.argv) > 2:
+            fmt = " ".join(sys.argv[2:])
+            if fmt == "default":
+                state.pop("label", None)
+            else:
+                try:
+                    fmt.format_map({k: "" for k in FIELDS})
+                except (KeyError, ValueError, IndexError) as e:
+                    sys.exit(f"herdr-queues: bad label format ({e!r}); fields: {' '.join('{%s}' % k for k in FIELDS)}")
+                state["label"] = fmt
+            save(state)
+        print(state.get("label") or LABEL)
     elif cmd == "watch":
         watch(notify="--no-notify" not in sys.argv[2:])
     elif cmd == "open":
