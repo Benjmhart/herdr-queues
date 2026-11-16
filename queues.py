@@ -8,7 +8,8 @@ each with one line of what it needs. Enter jumps to the agent, switching the her
   queues.py watch        run on the machine you sit at: carries out jumps asked for by a popup on any machine
   queues.py jump M P     switch the herdr window to machine M and focus pane P
   queues.py icon Q [E]   icon E for queue Q in herdr's sidebar ($queues_queue); no E clears it
-  queues.py label [F]    the sidebar's $queues_label layout, e.g. "{queue}{machine} {workspace}"; "default" resets
+  queues.py label [F]    the sidebar's $queues_label template, e.g. "{queue}{machine} {workspace} {folder}" (any pane
+                         token by name); "default" resets
 
 Standard library only. Data loads in a background thread, so keys never wait on the network.
 """
@@ -450,19 +451,27 @@ def icon(state, name):
 # divider between the emoji and the name). herdr puts " · " between a row's tokens (none after state_icon) and has no
 # setting for it, so the row is ["state_icon", "$queues_label"]. The machine icon is herdr-machine-icons' token on the
 # same pane; a workspace rename shows within the watcher's minute.
-# Its layout is yours: `queues.py label FORMAT` (synced to every machine like the queues), fields {queue} {machine}
-# {workspace} {host} {agent} {title}; empty fields drop out with their spaces.
+# Its layout is yours: `queues.py label FORMAT` (synced to every machine like the queues), a template over the
+# fields {queue} {machine} {workspace} {host} {agent} {title} AND every token on the agent's pane by name ({folder},
+# {fold}, any plugin's). herdr's rows can't do this: a row is a list of tokens joined by " · ", and "$a$b" is refused.
+# A field the pane doesn't have is empty; empty fields drop out with their spaces.
 LABEL = "{queue}{machine} {workspace}"
 FIELDS = ("queue", "machine", "workspace", "host", "agent", "title")
 
 
+class Blank(dict):
+    def __missing__(self, key):
+        return ""
+
+
 def label(a, qi, fmt=LABEL):
-    f = {"queue": qi or "", "machine": (a.get("tokens") or {}).get("machine_icon") or "",
-         "workspace": a.get("workspace") or a.get("workspace_id", ""), "host": a.get("host", ""),
-         "agent": a.get("agent", ""), "title": a.get("terminal_title_stripped", "")}
+    toks = {k: v for k, v in (a.get("tokens") or {}).items() if k != "queues_label"}  # not itself
+    f = Blank(toks, queue=qi or "", machine=toks.get("machine_icon") or "",
+              workspace=a.get("workspace") or a.get("workspace_id", ""), host=a.get("host", ""),
+              agent=a.get("agent", ""), title=a.get("terminal_title_stripped", ""))
     try:
         out = fmt.format_map(f)
-    except (KeyError, ValueError, IndexError):  # a bad format shows the default, not nothing
+    except (ValueError, IndexError, AttributeError):  # a broken format shows the default, not nothing
         out = LABEL.format_map(f)
     return " ".join(out.split())
 
@@ -1206,9 +1215,10 @@ def main(cmd):
                 state.pop("label", None)
             else:
                 try:
-                    fmt.format_map({k: "" for k in FIELDS})
-                except (KeyError, ValueError, IndexError) as e:
-                    sys.exit(f"herdr-queues: bad label format ({e!r}); fields: {' '.join('{%s}' % k for k in FIELDS)}")
+                    fmt.format_map(Blank())
+                except (ValueError, IndexError, AttributeError) as e:
+                    sys.exit(f"herdr-queues: bad label format ({e}); fields: {' '.join('{%s}' % k for k in FIELDS)}"
+                             " and any pane token by name, e.g. {folder}")
                 state["label"] = fmt
             save(state)
         print(state.get("label") or LABEL)

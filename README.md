@@ -123,7 +123,8 @@ rows = [["state_icon", "$queues_queue", "workspace", "machine", "tab"]]
     python3 queues.py icon priority 🔥     # set; synced to every machine like the queues
     python3 queues.py icon priority        # clear: the name shows again
 
-herdr puts ` · ` between a row's tokens. For the icons and the name with no divider, use `$queues_label`: the queue's
+herdr has no templates of its own: a row is a list of tokens it joins with ` · ` (none after `state_icon`), and
+`"$a$b"` is refused. For the icons and the name with no divider, use `$queues_label`: the queue's
 icon, the machine's icon ([herdr-machine-icons](https://github.com/Benjmhart/herdr-machine-icons)' `$machine_icon`, when
 installed) and the workspace name in one token, `🔥🐭 station-maintenance`. The watcher refreshes it every minute, so a
 renamed workspace shows within one.
@@ -138,9 +139,10 @@ Its layout is yours, synced to every machine like the queues:
     python3 queues.py label '{machine} {workspace} {queue}'  # set it
     python3 queues.py label default                          # back to the default
 
-Fields: `{queue}` (icon, or name when it has none; empty while unsorted), `{machine}` (`$machine_icon`), `{workspace}`,
-`{host}`, `{agent}` (claude, codex, ...), `{title}` (the pane's terminal title). An empty field drops out with its
-spaces. The sidebar follows within the watcher's minute.
+It is a template. Fields: `{queue}` (icon, or name when it has none; empty while unsorted), `{machine}`
+(`$machine_icon`), `{workspace}`, `{host}`, `{agent}` (claude, codex, ...), `{title}` (the pane's terminal title), and
+**every token on the agent's pane by name**: `{folder}`, `{fold}`, any plugin's. A field the pane doesn't have is empty;
+an empty field drops out with its spaces. The sidebar follows within the watcher's minute.
 
 The watcher keeps the tokens up on every machine it reaches (once a minute); a move in the popup updates them at once.
 herdr's agent list has no section headers, so the icon is the queue's mark.
