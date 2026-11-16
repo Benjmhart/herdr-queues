@@ -736,7 +736,7 @@ def focused():
     """pane.focused hook: a heading entry toggles its queue and hands focus back; any other pane is remembered."""
     ev = json.loads(os.environ.get("HERDR_PLUGIN_EVENT_JSON") or "{}").get("data", {})
     pane, last = ev.get("pane_id"), os.path.join(STATE_DIR, "last_focus")
-    panes = {p["pane_id"]: p for p in json.loads(herdr(None, "pane", "list"))["result"]["panes"]}
+    panes = {p["pane_id"]: p for p in sock("pane.list", {})["result"]["panes"]}
     q = ((panes.get(pane) or {}).get("tokens") or {}).get("queues_heading_for")
     if not q:
         os.makedirs(STATE_DIR, exist_ok=True)
@@ -749,13 +749,13 @@ def focused():
     try:
         back = open(last).read().strip()
         if back:
-            herdr(None, "workspace", "focus", back)
-    except (OSError, RuntimeError):
+            sock("workspace.focus", {"workspace_id": back})
+    except (OSError, RuntimeError, ValueError):
         pass
-    refresh()
+    refresh(fresh_info=False)
 
 
-def refresh():
+def refresh(fresh_info=True):
     """This machine's tokens and heading entries. Runs coalesce: herdr fires a burst of events (each heading change is
     one), so a run that finds another going marks it to go round once more and exits."""
     import fcntl
@@ -772,14 +772,23 @@ def refresh():
             os.remove(again)
         except OSError:
             pass
-        refresh_once()
+        refresh_once(fresh_info)
         if not os.path.exists(again):
             break
 
 
-def refresh_once():
+def changed(reqs, agents):
+    """Only the token reports that change something: each one re-renders herdr's sidebar, and resending all of them
+    made a heading click take seconds (Ben 2026-11-16: "very slow and inconsistent")."""
+    now = {a["pane_id"]: a.get("tokens") or {} for a in agents}
+    return [r for r in reqs if r[0] != "pane.report_metadata" or r[1]["pane_id"] not in now
+            or any((now[r[1]["pane_id"]].get(k) or None) != (v or None) for k, v in r[1]["tokens"].items())]
+
+
+def refresh_once(fresh_info=True):
     if os.path.exists(STATE):
-        time.sleep(1)  # herdr-machine-icons runs on the same event: let its icon land first
+        if os.environ.get("HERDR_PLUGIN_EVENT") == "pane.agent_detected":
+            time.sleep(1)  # herdr-machine-icons runs on the same event: let its icon land first
         state = load()
         listed = json.loads(herdr(None, "agent", "list"))["result"]["agents"]
         listed = real(listed)
@@ -787,13 +796,14 @@ def refresh_once():
         wsn = {w["workspace_id"]: w.get("label") or w["workspace_id"] for w in ws}
         ids = list(wsn)
         listed.sort(key=lambda a: ids.index(a["workspace_id"]) if a.get("workspace_id") in ids else len(ids))
-        reqs = []
+        reqs, before = [], [dict(a, tokens=dict(a.get("tokens") or {})) for a in listed]
         for a in listed:
             a["host"], a["workspace"] = socket.gethostname(), wsn.get(a.get("workspace_id"), a.get("workspace_id"))
-            t = info(a, state)
-            reqs.append(["pane.report_metadata", {"pane_id": a["pane_id"], "source": INFO, "tokens": t}])
-            a["tokens"] = {**(a.get("tokens") or {}), **{k: v for k, v in t.items() if v}}
-        call(None, reqs + hiding(state, listed))
+            if fresh_info:  # git and transcripts: not on a heading click, the tokens already there do
+                t = info(a, state)
+                reqs.append(["pane.report_metadata", {"pane_id": a["pane_id"], "source": INFO, "tokens": t}])
+                a["tokens"] = {**(a.get("tokens") or {}), **{k: v for k, v in t.items() if v}}
+        call(None, changed(reqs + hiding(state, listed), before))
         entries_sync(state, listed)
 
 
@@ -1112,6 +1122,21 @@ def relay(ms):
         time.sleep(3)
 
 
+def on_state_change():
+    """Redraw this machine's sidebar as soon as the queues change (a collapse clicked on another machine arrives here as
+    a new state file); the 60 s nag pass was the only redraw before (Ben 2026-11-16: collapse "inconsistent")."""
+    seen = None
+    while True:
+        try:
+            m = os.stat(STATE).st_mtime
+            if seen is not None and m != seen:
+                refresh(fresh_info=False)
+            seen = m
+        except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError):
+            pass
+        time.sleep(0.3)
+
+
 def watch(notify=True):
     import fcntl
     os.makedirs(STATE_DIR, exist_ok=True)
@@ -1127,6 +1152,7 @@ def watch(notify=True):
         threading.Thread(target=follow, args=(label, ms), daemon=True).start()
     threading.Thread(target=relay, args=(ms,), daemon=True).start()
     threading.Thread(target=nag, args=(ms, notify), daemon=True).start()
+    threading.Thread(target=on_state_change, daemon=True).start()
     here = os.path.dirname(os.path.realpath(__file__))
     while True:  # a `herdr plugin install`/update leaves this process on the old code: follow it (Ben 2026-11-15)
         time.sleep(60)
@@ -1221,7 +1247,7 @@ def nag(ms, notify=True):
                         if order != rids:
                             apply_order(m, ms[m][1], order + [w for w in ids if w in hw])
                             listed.sort(key=lambda a: order.index(a["workspace_id"]) if a.get("workspace_id") in order else len(order))
-                    call(ms[m][1], hiding(state, listed))
+                    call(ms[m][1], changed(hiding(state, listed), listed))
                     if m == "":  # heading entries: each machine keeps its own (no two watchers race to create them)
                         entries_sync(state, listed)
                 except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):

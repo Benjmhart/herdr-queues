@@ -42,4 +42,9 @@ assert q.heading_text(st2, "priority", 2, False) == "▾ 🔥 priority"
 assert q.heading_text(st2, "priority", 2, True) == "▸ 🔥 priority +2"
 h = A("p9", "h", "idle"); h["tokens"]["queues_heading_for"] = "priority"
 assert q.real([h, A("p1", "a", "idle")]) == [A("p1", "a", "idle")]
+# only the token reports that change something are sent
+ag = [{"pane_id": "p1", "tokens": {"queues_label": "x", "queues_heading": "h"}}]
+rq = lambda tk: ["pane.report_metadata", {"pane_id": "p1", "source": "s", "tokens": tk}]
+assert q.changed([rq({"queues_label": "x", "queues_heading_after": None}), ["agent.view.set", {}]], ag) == [["agent.view.set", {}]]
+assert len(q.changed([rq({"queues_heading": None})], ag)) == 1 and len(q.changed([rq({"queues_label": "y"})], ag)) == 1
 print("ok")
