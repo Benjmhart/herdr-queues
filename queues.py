@@ -1155,7 +1155,9 @@ def tool(*cmd, env=None):
 
 def x11(*args, prog="xdotool"):
     """xdotool, or kdotool (the same commands, for KWin on Wayland)."""
-    return tool(prog, *args, env=dict(os.environ, DISPLAY=os.environ.get("DISPLAY") or ":0"))
+    env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY") or ":0")
+    env.setdefault("KDE_SESSION_VERSION", "6")  # kdotool refuses without it ("Unsupported KDE version"; Plasma 6.8 VM)
+    return tool(prog, *args, env=env)
 
 
 def sway(*args):
@@ -1173,6 +1175,17 @@ def gnome(method, *args):
                "/org/gnome/Shell/Extensions/Windows", "--method", f"org.gnome.Shell.Extensions.Windows.{method}", *args)
     m = re.match(r"\('(.*)',\)\s*$", out, re.S)  # ('<json>',)
     return m.group(1) if m else ""
+
+
+def overview(close=None):
+    """GNOME's Activities overview: is it open (close=None), or close it (False). Over D-Bus, never by Escape, which in
+    a herdr pane would interrupt an agent. At login GNOME opens it, and keys typed then went to its search (VM, GNOME 51)."""
+    args = ["gdbus", "call", "--session", "--dest", "org.gnome.Shell", "--object-path", "/org/gnome/Shell", "--method"]
+    is_open = lambda: "true" in tool(*args, "org.freedesktop.DBus.Properties.Get", "org.gnome.Shell", "OverviewActive")
+    if close is False and is_open():
+        tool(*args, "org.freedesktop.DBus.Properties.Set", "org.gnome.Shell", "OverviewActive", "<false>")
+        time.sleep(0.8)  # keys typed during the closing animation were lost (VM, GNOME 51)
+    return is_open()
 
 
 def wayland_env():
@@ -1266,9 +1279,12 @@ def focus(d, w):
     if d == "sway":
         sway(f"[con_id={w}] focus")
     elif d == "hyprland":
-        hyprctl("dispatch", "focuswindow", f"address:{w}")
+        # Hyprland 0.57 (Lua config) parses dispatch as Lua: the old form is an error there (Arch VM, 2026-11-16).
+        if hyprctl("dispatch", "focuswindow", f"address:{w}").strip() != "ok":
+            hyprctl("dispatch", f'hl.dsp.focus({{window = "address:{w}"}})')
     elif d == "gnome":
         gnome("Activate", w)
+        overview(False)  # Activate leaves the Activities overview up, and keys would type into its search
     elif d == "kde":
         x11("windowactivate", w, prog="kdotool")
     else:
@@ -1322,6 +1338,8 @@ def jump(machine, pane, ms=None, shown_by=None):
         shown = next((l for l, (h, _) in ms.items() if h == win[1]), None)
         word = machine or "local"
         focus(d, win[0])
+        if d == "gnome" and overview():
+            return
         before = focused_screen(shown) if shown is not None else None
         press(d, *goto, "slash")
         type_text(d, word)
@@ -1376,7 +1394,7 @@ def at_desk(host):
     showing the requesting machine, on an unlocked screen, carries out a jump (keys typed elsewhere could land in a
     lock screen's password box)."""
     d = desktop()
-    if locked(d):
+    if locked(d) or (d == "gnome" and overview()):
         return False
     focused = next((w for w, _, f in windows(d) if f), None)
     return any(w == focused for w, h in herdr_windows({host}, d))

@@ -280,8 +280,12 @@ its own notification. A dimmed suggested prompt isn't counted.
 
 ## Limits
 
-- The machine switch is tested on X11 and sway (headless). Hyprland, KDE and GNOME are written to their tools' documented
-  commands but not yet run on those desktops.
+- The machine switch is tested on X11, sway (headless), and in an Arch VM on Hyprland 0.57, KDE Plasma 6.8 and GNOME 51
+  (a stand-in window logging the keys it got: exact keys with Return; the guard's ctrl+u and no Return; lock screens).
+- GNOME: Window Calls 1.17 (`c2da096`) declares GNOME ≤ 50 and its per-window calls fail (`if (!w)` for `if (!win)` in
+  `_get_window_by_wid`), so Activate never works. On GNOME 51 it needs that one-word fix and
+  `gsettings set org.gnome.shell disable-extension-version-validation true`, until upstream catches up.
+- `ydotoold` must run with its socket where `ydotool` looks (`$XDG_RUNTIME_DIR/.ydotool_socket`, or `YDOTOOL_SOCKET`).
 - The Goto guard reads the pane, not herdr's own dialogs: if another herdr dialog is open (the first-run setup on a fresh
   config), the keys go there and Return is still pressed.
 - The summary scrapes the visible screen and is tuned on Claude Code; other agents show their last line.
