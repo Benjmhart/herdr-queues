@@ -23,7 +23,7 @@ assert t["p1"]["queues_heading"] == "🐭 micro" and t["p2"]["queues_heading"] i
 assert q.setting(st, "color", ["priority", "#ff5555"]) and not q.setting(st, "color", ["priority", "red"])
 r = q.rows_toml(st); tomllib.loads(r); assert "$queues_heading_after" not in r and "state_icon" in r
 st.update(mark="own", headings="queue", sort="queues", spinner=True); r = q.rows_toml(st); tomllib.loads(r)
-assert "$queues_heading_after" in r and "state_icon" not in r
+assert "$queues_heading_after" in r and "state_icon" not in r and q.WJ not in r  # escaped, not invisible
 t = tok(st)  # own marks: heading above the first agent only, later headings ride on the previous agent's 3rd row
 P, W = q.PAD, q.WJ
 assert t["p1"]["queues_heading"] == P * 2 + "▾ 🔥 priority" + W  # red = palette slot 1

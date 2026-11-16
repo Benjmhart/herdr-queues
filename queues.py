@@ -654,7 +654,8 @@ def host_setting(state, host, what):
 
 def rows_toml(state):
     """herdr's [ui.sidebar.agents] for the current mark style. Static: colours are settings, not config."""
-    slots = [f'{{ contains = "{WJ * (i + 1)}", fg = "{c}" }}' for i, c in reversed(list(enumerate(SIDEBAR_COLOURS.values())))]
+    slots = [f'{{ contains = "{"\\u2060" * (i + 1)}", fg = "{c}" }}'  # escaped: no invisible text in config
+             for i, c in reversed(list(enumerate(SIDEBAR_COLOURS.values())))]
     head = '{ token = "$queues_heading", bold = true, rules = [' + ", ".join(slots) + "] }"
     if state.get("mark") == "own":
         lab = ('{ token = "$queues_label", rules = [{ contains = "⚠", fg = "#ff5555", bold = true }, '
