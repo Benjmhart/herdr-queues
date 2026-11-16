@@ -92,7 +92,7 @@ Start the watcher with your desktop session, e.g. in xmonad's startup hook or i3
 python3 "$(ls -dt ~/.config/herdr/plugins/github-installations/benjmhart.queues-*/*/checkout/queues.py | head -1)" watch
 ```
 
-It needs `xdotool` and an X11 display, the Goto picker on `prefix+a` with `prefix` = ctrl+b, and herdr's window
+It needs `xdotool` on X11, or `swaymsg` and `wtype` on sway (found even when the watcher has no `SWAYSOCK`), the Goto picker on `prefix+a` with `prefix` = ctrl+b, and herdr's window
 title in its default shape, `{hostname}: {workspace}` (a `herdr: ` prefix is fine). Without a watcher, Enter on
 this server's own agents still works; on another machine's it does nothing visible.
 
@@ -268,7 +268,8 @@ its own notification. A dimmed suggested prompt isn't counted.
 
 ## Limits
 
-- X11 only for the machine switch (xdotool). On Wayland the jump can focus the agent but not switch machines.
+- The machine switch works on X11 (xdotool) and sway (swaymsg + wtype). On other Wayland compositors (GNOME, KDE,
+  Hyprland) the jump can focus the agent but not switch machines.
 - The summary scrapes the visible screen and is tuned on Claude Code; other agents show their last line.
 
 ## Upgrading from herdr-streams
