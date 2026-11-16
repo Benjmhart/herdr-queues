@@ -27,8 +27,8 @@ assert "$queues_heading_after" not in r and "#f8f8f2" in r and "state_icon" not 
 t = tok(st)  # own marks: every heading flush left on its group's first agent; names uncoloured under headings
 P, W = q.PAD, q.WJ
 assert t["p1"]["queues_heading"] == "▾ 🔥 priority" + W  # red = palette slot 1
-assert t["p1"]["queues_label"] == q.SPIN[0] + " 🔥🐭 a"  # herdr indents it two; working: the spinner's first frame
-assert t["p2"]["queues_label"] == P * 2 + "🔴 🔥🐭 b" and t["p2"]["queues_heading"] is None
+assert t["p1"]["queues_label"] == q.SPIN[0] + "  🔥🐭 a" + q.marker("yellow")  # herdr indents it two; working: the spinner's first frame
+assert t["p2"]["queues_label"] == P * 2 + "🔴 🔥🐭 b" + q.marker("red") and t["p2"]["queues_heading"] is None
 assert t["p3"]["queues_label"] == P * 2 + " work🐭 c" and t["p3"]["queues_heading"] == "▾ work"
 assert all(t[p]["queues_heading_after"] is None for p in t)
 assert not q.setting(st, "host", ["micro", "icon", "🦊"]); t = tok(st); assert "🦊" in t["p1"]["queues_label"]
@@ -70,7 +70,12 @@ D = lambda st, **tk: {"pane_id": "p", "agent_status": st, "state_change_seq": 7,
 assert q.need(D("done")) == "done" and q.need(D("done", queues_seen="7")) == "done_seen" and q.need(D("done", queues_seen="6")) == "done"
 assert q.need(D("done", queues_asks="1")) == "asks" and q.need(D("idle", queues_asks="1")) == "asks_seen"
 assert q.need(D("done", queues_bg="1")) == "background" and q.need(D("idle")) == "idle" and q.need(D("working")) == "working"
-assert q.mark_of(D("done", queues_seen="7"), False) == "✓ " and q.mark_of(D("working"), True) == q.SPIN[0]
+assert q.mark_of(D("done", queues_seen="7"), False) == "✓ " and q.mark_of(D("working"), True) == q.SPIN[0] + " "
 assert q.asks_text("Done.\n\nShall I push it?") and not q.asks_text("Is it? Yes.\n\nAll pushed.")
 assert q.BG.search("-- INSERT -- ⏵⏵ auto mode on · 1 shell · ← 2 agents") and not q.BG.search("· ← 2 agents")
+st4 = {}
+assert q.setting(st4, "icon", ["bogus", "x"]) and not q.setting(st4, "icon", ["done", "✓"]) and q.marks(st4)["done"] == "✓"
+assert not q.setting(st4, "icon", ["spin", "a", "b"]) and q.spin_frames(st4) == ["a", "b"]
+assert not q.setting(st4, "icon", ["working", "color", "none"]) and q.mark_colour(st4, "working") is None
+assert not q.setting(st4, "icon", ["done", "default"]) and q.marks(st4)["done"] == "✔"
 print("ok")

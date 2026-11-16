@@ -12,6 +12,7 @@ each with one line of what it needs. Enter jumps to the agent, switching the her
   queues.py color Q C    queue Q's colour (red orange yellow green cyan purple pink grey, none); colorby queue|machine
   queues.py host H icon E | host H color C   a machine's emoji (overrides herdr-machine-icons) and colour
   queues.py headings queue|machine|off;  collapse Q;  mark own|herdr;  spinner on|off;  badge model|gitstatus V [E]
+  queues.py icon NAME GLYPH|default;  icon NAME color COLOUR|none;  icon spin 'F1 F2 ...'|default   (NAME: blocked asks asks_seen done done_seen background idle working unknown)
   queues.py rows         herdr's [ui.sidebar.agents] for the mark style (colours are settings: it never changes)
   queues.py spin         the spinner (herdr starts it with the server)
   queues.py entries on|off   experimental: each queue heading an entry of its own; clicking it collapses the queue
@@ -629,7 +630,7 @@ RANK = {"blocked": 0, "done": 1, "idle": 2, "working": 3}
 ON = ("queues", "auto")  # the queue sidebar's modes (`s`): static queue order, or re-sorted every minute
 
 
-SETTINGS = ("color", "colorby", "headings", "collapse", "badge", "host", "mark", "spinner", "entries")
+SETTINGS = ("color", "colorby", "headings", "collapse", "badge", "host", "mark", "spinner", "entries", "icon")
 
 
 def setting(state, cmd, args):
@@ -652,6 +653,18 @@ def setting(state, cmd, args):
         state["collapsed"] = sorted(set(state.get("collapsed", [])) ^ {args[0]})
     elif cmd == "mark" and args[0] in ("own", "herdr"):
         state["mark"] = args[0]
+    elif cmd == "icon":  # icon NAME GLYPH|default; icon NAME color COLOUR|none; icon spin "F1 F2 ..."|default
+        names = (*MARKS, "spin")
+        if len(args) < 2 or args[0] not in names or (args[1] == "color" and (len(args) < 3 or args[2] not in
+                                                                             (*SIDEBAR_COLOURS, "none"))):
+            return f"icon {'|'.join(names)} GLYPH|default  or  icon NAME color {'|'.join(SIDEBAR_COLOURS)}|none"
+        if args[1] == "color":
+            state.setdefault("mark_colors", {})[args[0]] = None if args[2] == "none" else args[2]
+        elif args[0] == "spin":
+            state.pop("spin_frames", None) if args[1] == "default" else state.update(spin_frames=" ".join(args[1:]).split())
+        else:
+            m = state.setdefault("marks", {})
+            m.pop(args[0], None) if args[1] == "default" else m.update({args[0]: args[1]})
     elif cmd == "spinner" and args[0] in ("on", "off"):
         state["spinner"] = args[0] == "on"
     elif cmd == "entries" and args[0] in ("on", "off"):
@@ -704,8 +717,10 @@ def spin_loop():
         try:
             for a in sock("agent.list", {})["result"]["agents"]:
                 lab = (a.get("tokens") or {}).get("queues_label") or ""
-                if a.get("agent_status") == "working" and any(ch in lab for ch in SPIN):
-                    new = re.sub(f"[{SPIN}]", SPIN[i % len(SPIN)], lab, count=1)
+                fr = spin_frames(state)
+                hit = re.compile("|".join(map(re.escape, sorted(fr, key=len, reverse=True))))
+                if a.get("agent_status") == "working" and hit.search(lab):
+                    new = hit.sub(fr[i % len(fr)], lab, count=1)
                     sock("pane.report_metadata", {"pane_id": a["pane_id"], "source": SOURCE, "tokens": {"queues_label": new}})
         except (OSError, ValueError, KeyError):
             time.sleep(5)  # no server (yet): try again later
@@ -866,9 +881,13 @@ def refresh_once(fresh_info=True):
         ids = list(wsn)
         listed.sort(key=lambda a: ids.index(a["workspace_id"]) if a.get("workspace_id") in ids else len(ids))
         reqs, before = [], [dict(a, tokens=dict(a.get("tokens") or {})) for a in listed]
+        # A status change re-reads only its own agent: reading every transcript and screen first held a red mark for
+        # 30 s after Ben answered (beast-arch plugin log, 2026-11-16).
+        ev = json.loads(os.environ.get("HERDR_PLUGIN_EVENT_JSON") or "{}").get("data", {}).get("pane_id")
+        only = ev if os.environ.get("HERDR_PLUGIN_EVENT") == "pane.agent_status_changed" else None
         for a in listed:
             a["host"], a["workspace"] = socket.gethostname(), wsn.get(a.get("workspace_id"), a.get("workspace_id"))
-            if fresh_info:  # git and transcripts: not on a heading click, the tokens already there do
+            if fresh_info and (only is None or a["pane_id"] == only):  # git and transcripts: not on a heading click
                 t = info(a, state)
                 reqs.append(["pane.report_metadata", {"pane_id": a["pane_id"], "source": INFO, "tokens": t}])
                 a["tokens"] = {**(a.get("tokens") or {}), **t}
@@ -900,8 +919,13 @@ WJ, PAD = "\u2060", "\u2800"
 # Done: one check shape, green until seen (Ben: "the same as the grey checkbox but green"): no emoji is a bare green
 # check, so ✔ (text, unlike ✅) turns its row green by rule, as 🔴 turns a blocked row red.
 MARKS = {"blocked": "🔴", "asks": "❓", "asks_seen": "❔", "done": "✔", "done_seen": "✓", "background": "⏳",
-         "idle": PAD * 2, "working": "🌍", "unknown": "·"}
-SPIN = "🌍🌎🌏"  # a turning globe: coloured and light on a dark background (moons: the new moon vanished; clocks: no)
+         "idle": PAD * 2, "working": "\uee06", "unknown": "·"}
+# A Nerd Font arc (Symbols Nerd Font, on every desk), turning (Ben: moons, clocks, globe all rejected). Frames are a
+# list: a frame may be more than one character.
+SPIN = ["\uee06", "\uee07", "\uee08", "\uee09", "\uee0a", "\uee0b"]
+# Each mark may colour its row: a herdr rule colours a whole token, so a coloured spinner means a coloured row. Palette
+# names (the label's invisible marker), so no config change. `queues.py icon NAME color COLOUR|none`.
+MARK_COLOURS = {"blocked": "red", "done": "green", "working": "yellow"}
 NEED = {"blocked": 0, "asks": 1, "done": 2, "asks_seen": 3, "background": 4, "done_seen": 5, "idle": 5, "working": 6}
 
 
@@ -919,9 +943,21 @@ def need(a):
     return "idle" if st == "idle" else "done_seen" if seen else "done"
 
 
-def mark_of(a, spin):
-    n = need(a)
-    m = SPIN[0] if n == "working" and spin else MARKS[n]
+def marks(state):
+    return {**MARKS, **(state.get("marks") or {})}
+
+
+def spin_frames(state):
+    return state.get("spin_frames") or SPIN
+
+
+def mark_colour(state, n):
+    return {**MARK_COLOURS, **(state.get("mark_colors") or {})}.get(n)
+
+
+def mark_of(a, spin, state=None):
+    n, state = need(a), state or {}
+    m = spin_frames(state)[0] if n == "working" and spin else marks(state)[n]
     import unicodedata
     return m if sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in m) >= 2 else m + " "
 
@@ -941,8 +977,7 @@ def rows_toml(state):
     head = '{ token = "$queues_heading", bold = true, rules = [' + ", ".join(slots) + "] }"
     if state.get("mark") == "own":
         # an unstyled token is herdr's dim comment grey: names get the bright text colour (Ben 2026-11-16)
-        lab = ('{ token = "$queues_label", fg = "#f8f8f2", rules = [{ contains = "' + MARKS["blocked"] + '", fg = "#ff5555", bold = true }, '
-               '{ contains = "' + MARKS["done"] + '", fg = "#50fa7b" }, '
+        lab = ('{ token = "$queues_label", fg = "#f8f8f2", rules = ['
                + ", ".join(slots) + "] }")
         rows = [f"  [{head}],", f"  [{lab}],"]
     else:
@@ -998,10 +1033,11 @@ def hiding(state, agents, host=HOST):
         qi = None if q == UNSORTED else icon(state, q)
         # Under a heading the heading carries the colour and names keep herdr's text colour: a whole name in red or
         # green was hard to read on Ben's translucent terminal (2026-11-16). Blocked stays red (the 🔴 rule).
-        body = label(a, qi, fmt, host_setting(state, a.get("host"), "icon")) + ("" if heads or entries else colour(a))
+        mc = mark_colour(state, need(a)) if own else None  # the mark's colour takes the row, over the queue's
+        body = label(a, qi, fmt, host_setting(state, a.get("host"), "icon")) + (
+            marker(mc) if mc else "" if heads or entries else colour(a))
         if own:
-            st = a.get("agent_status")
-            mark = mark_of(a, spin)
+            mark = mark_of(a, spin, state)
             # herdr indents the label two when a heading is above it; the rest of the group pads to match
             body = (("" if a["pane_id"] in above else PAD * 2) if heads else PAD if entries else "") + f"{mark} {body}"
         return {TOKEN: "1" if a["pane_id"] in hidden else None, "queues_queue": qi, "queues_label": body,
