@@ -160,10 +160,18 @@ doesn't pass clicks to plugins, so a heading can't be clicked open or shut: use 
 clickable headings below.
 
 **Clickable headings (experimental): `queues.py entries on`.** Each queue's heading becomes an entry of its own: an
-empty workspace placed just above the queue, whose pane is reported to herdr as an agent (kind `muse`: herdr drops a
-kind it doesn't know) and labelled with the heading. Clicking it collapses or opens the queue, and focus goes back to
-where you were. Needs `s` on (queue or auto order) and `headings queue`; turn either off, or `entries off`, and the
-heading workspaces are closed. Each machine keeps its own, made by its own hooks and watcher. What it costs:
+empty workspace whose pane is reported to herdr as an agent (kind `muse`: herdr drops a kind it doesn't know) and
+labelled with the heading. Clicking it collapses or opens the queue, and focus goes back to where you were. Needs `s`
+on (queue or auto order) and `headings queue`; turn either off, or `entries off`, and the heading workspaces are
+closed.
+
+With clickable headings the agents list is **one list for every machine**, not a block per machine: every agent
+carries a `queues_rank` token (its queue, your `J`/`K` order, in auto order its status, then machine and workspace)
+and every server's agent view sorts by it, so each queue has one heading with its agents from all machines under it.
+The view of the server you are looking at applies to the whole list, so every server keeps a set of headings and its
+view shows only its own (token `queues_heading_host`); a click lands on the server you are looking at. Every queue
+gets a heading, empty or not (`unsorted` last), and a collapsed heading shows no `+N` (no one machine sees every
+agent). What it costs:
 
 - herdr reports a click and a keyboard switch alike, so **landing on a heading by any route toggles it**: cycling
   workspaces with the keyboard, or picking it in `prefix+a`. Focus is handed back, with a brief flash.

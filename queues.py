@@ -424,6 +424,42 @@ SOURCE = "user:herdr-queues"
 VIEW = {"source": SOURCE, "filter": {"op": "not", "filter": {"op": "exists", "field": {"token": TOKEN}}}}
 
 
+def view(state, host):
+    """The agent view for one server. With heading entries the list is one list for every machine: sorted by the
+    queues_rank token (queue, your order, then status in auto), and the headings shown are the viewing server's own,
+    each server keeping a set (2026-11-16 two-server sandbox: the selected server's view filters and sorts the combined
+    list; a herdr agent sort interleaves machines, workspace order can't)."""
+    if not entries_on(state):
+        return VIEW
+    ex = lambda t: {"op": "exists", "field": {"token": t}}
+    return {"source": SOURCE, "filter": {"op": "all", "filters": [
+        {"op": "not", "filter": ex(TOKEN)},
+        {"op": "any", "filters": [{"op": "not", "filter": ex("queues_heading_host")},
+                                  {"op": "eq", "field": {"token": "queues_heading_host"}, "value": host}]}]},
+        "sort": [{"field": {"token": "queues_rank"}, "order": "asc"}]}
+
+
+def entries_on(state):
+    return state.get("sort") in ON and state.get("headings") == "queue" and bool(state.get("entries"))
+
+
+def groups_of(state):
+    """Every queue gets a heading, unsorted last: no one machine knows which queues have agents anywhere."""
+    return list(state["queues"]) + [UNSORTED]
+
+
+def rank_of(state, a=None, q=None):
+    """queues_rank: a heading sorts first in its queue ("-0000"), then agents by your order, status (auto), machine."""
+    q = q if a is None else queue_of(state, a)
+    gs = groups_of(state)
+    qi = gs.index(q) if q in gs else len(gs)
+    if a is None:
+        return f"{qi:03d}-0000"
+    p = position(state, q, a)
+    st = RANK.get(a.get("agent_status"), 4) if state.get("sort") == "auto" else 0
+    return f"{qi:03d}-{9999 if p is None else p + 1:04d}-{st}-{a.get('host', '')}-{a.get('workspace', '')}"
+
+
 def inactive(state, agent):
     return any(k in state.get("inactive", []) for k in keys(agent))
 
@@ -652,7 +688,7 @@ def heading_text(state, q, n_hidden, collapsed):
 
 
 def entries_sync(state, listed):
-    """This machine's heading entries: create, relabel, close, and order them. listed: real agents, sidebar order.
+    """This machine's heading entries, one per queue: create, relabel, close. The agent view orders them (queues_rank).
     Under a lock, re-reading herdr: hooks and the watcher run it at the same time."""
     import fcntl
     os.makedirs(STATE_DIR, exist_ok=True)
@@ -665,8 +701,7 @@ def entries_sync(state, listed):
         agents_now = agent_panes()  # the pane list never says which agent a pane holds
         for h in heads_here:
             h["agent"] = agents_now.get(h["pane_id"])
-        ids = [w["workspace_id"] for w in json.loads(herdr(None, "workspace", "list"))["result"]["workspaces"]]
-        want = state.get("sort") in ON and state.get("headings") == "queue" and state.get("entries")
+        want = entries_on(state)
         have = {}  # queue -> heading agent
         for h in heads_here:
             q = (h.get("tokens") or {}).get("queues_heading_for")
@@ -676,12 +711,7 @@ def entries_sync(state, listed):
                 have[q] = h
         if not want:
             return
-        shown = [a for a in listed if not inactive(state, a)]
-        groups = []  # queues in sidebar order
-        for a in shown:
-            q = queue_of(state, a)
-            if q not in groups:
-                groups.append(q)
+        groups = groups_of(state)
         for q in list(have):
             if q not in groups:
                 herdr(None, "workspace", "close", have.pop(q)["workspace_id"])
@@ -692,44 +722,26 @@ def entries_sync(state, listed):
             if h.get("agent") != HEAD_AGENT:
                 herdr(None, "pane", "report-agent", h["pane_id"], "--source", HEAD_SOURCE, "--agent", HEAD_AGENT, "--state", "idle")
         for q in groups:
-            n = sum(1 for a in shown if queue_of(state, a) == q) - 1
-            text = heading_text(state, q, n, q in collapsed)
+            text = heading_text(state, q, 0, q in collapsed)  # ponytail: no "+N": no one machine sees every agent
+            toks = {"queues_heading_for": q, "queues_label": text + colour(q), "queues_rank": rank_of(state, q=q),
+                    "queues_heading_host": HOST}
             h = have.get(q)
             if not h:
                 r = json.loads(herdr(None, "workspace", "create", "--label", text, "--no-focus"))["result"]
                 pane, wid = r["root_pane"]["pane_id"], r["workspace"]["workspace_id"]
-                call(None, [["pane.report_metadata", {"pane_id": pane, "source": SOURCE, "tokens": {
-                    "queues_heading_for": q, "queues_label": text + colour(q)}}]])  # before it is an agent: see above
+                call(None, [["pane.report_metadata", {"pane_id": pane, "source": SOURCE, "tokens": toks}]])
                 for _ in range(10):  # herdr drops a reported agent when it detects the new pane's shell: report after
                     time.sleep(0.5)
                     herdr(None, "pane", "report-agent", pane, "--source", HEAD_SOURCE, "--agent", HEAD_AGENT, "--state", "idle")
                     time.sleep(1)
                     if pane in agent_panes():
                         break
-                have[q] = h = {"pane_id": pane, "workspace_id": wid, "agent": HEAD_AGENT,
-                               "tokens": {"queues_label": text + colour(q)}}
-                ids = ids + [wid]
-            if (h.get("tokens") or {}).get("queues_label") != text + colour(q):
-                herdr(None, "workspace", "rename", h["workspace_id"], text)
-                call(None, [["pane.report_metadata", {"pane_id": h["pane_id"], "source": SOURCE, "tokens": {
-                    "queues_heading_for": q, "queues_label": text + colour(q)}}]])
-        # each heading just above its queue's first workspace; the rest keep their order
-        heads = {h["workspace_id"] for h in have.values()}
-        first = {}
-        for a in shown:
-            first.setdefault(queue_of(state, a), a["workspace_id"])
-        before = {first[q]: have[q]["workspace_id"] for q in groups if q in first}
-        order = []
-        for w in ids:
-            if w in heads:
-                continue
-            if w in before and before[w] not in order:
-                order.append(before[w])
-            if w not in order:
-                order.append(w)
-        order += [w for w in heads if w not in order]
-        if order != ids:
-            apply_order("", None, order)
+                have[q] = h = {"pane_id": pane, "workspace_id": wid, "agent": HEAD_AGENT, "tokens": toks}
+            old = h.get("tokens") or {}
+            if any(old.get(k) != v for k, v in toks.items()):
+                if old.get("queues_label") != toks["queues_label"]:
+                    herdr(None, "workspace", "rename", h["workspace_id"], text)
+                call(None, [["pane.report_metadata", {"pane_id": h["pane_id"], "source": SOURCE, "tokens": toks}]])
 
 
 def focused():
@@ -852,7 +864,7 @@ def rows_toml(state):
     return "[ui.sidebar.agents]\nrows = [\n" + "\n".join(rows) + "\n]"
 
 
-def hiding(state, agents):
+def hiding(state, agents, host=HOST):
     """One machine's requests: each agent's tokens (hidden, queue, label, headings), then the view. agents in sidebar
     order. Hidden: inactive, or in a collapsed queue and not its most urgent agent (that one carries the queue: "+N")."""
     on, own = state.get("sort") in ON, state.get("mark") == "own"
@@ -865,12 +877,14 @@ def hiding(state, agents):
     live = [a for a in agents if not inactive(state, a)]
     carrier, extra = {}, {}
     for q in collapsed:
-        ms = [a for a in live if queue_of(state, a) == q]
+        ms = [] if entries else [a for a in live if queue_of(state, a) == q]
         if ms:
             c = min(ms, key=lambda a: (RANK.get(a.get("agent_status"), 4), live.index(a)))
             carrier[q], extra[q] = c["pane_id"], len(ms) - 1
     hidden = {a["pane_id"] for a in live if queue_of(state, a) in carrier and carrier[queue_of(state, a)] != a["pane_id"]}
     hidden |= {a["pane_id"] for a in agents if inactive(state, a)}
+    if entries:  # one list for every machine: a carrier on each would leave several under the heading
+        hidden |= {a["pane_id"] for a in live if queue_of(state, a) in collapsed}
     colour = lambda a: marker((state.get("colors") or {}).get(queue_of(state, a)) if by == "queue"
                               else host_setting(state, a.get("host"), "color"))
     above, last = {}, object()
@@ -904,11 +918,12 @@ def hiding(state, agents):
             # herdr indents the label two when a heading is above it; the rest of the group pads to match
             body = (("" if a["pane_id"] in above else PAD * 2) if heads else PAD if entries else "") + f"{mark} {body}"
         return {TOKEN: "1" if a["pane_id"] in hidden else None, "queues_queue": qi, "queues_label": body,
-                "queues_heading": above.get(a["pane_id"]), "queues_heading_after": None}  # retired 2026-11-16; cleared
+                "queues_heading": above.get(a["pane_id"]), "queues_heading_after": None,  # retired 2026-11-16; cleared
+                "queues_rank": rank_of(state, a) if entries else None}
     reqs = [["pane.report_metadata", {"pane_id": a["pane_id"], "source": SOURCE, "tokens": tokens(a)}] for a in agents]
     # Always set: the viewing client's server filters every machine's list, so a server with nothing of its own to
     # hide clearing it brought back other machines' hidden agents (Ben 2026-11-16, micro after a refresh).
-    return reqs + [["agent.view.set", VIEW]]
+    return reqs + [["agent.view.set", view(state, host)]]
 
 
 def resort(state, agents, ms):
@@ -1247,7 +1262,7 @@ def nag(ms, notify=True):
                         if order != rids:
                             apply_order(m, ms[m][1], order + [w for w in ids if w in hw])
                             listed.sort(key=lambda a: order.index(a["workspace_id"]) if a.get("workspace_id") in order else len(order))
-                    call(ms[m][1], changed(hiding(state, listed), listed))
+                    call(ms[m][1], changed(hiding(state, listed, ms[m][0]), listed))
                     if m == "":  # heading entries: each machine keeps its own (no two watchers race to create them)
                         entries_sync(state, listed)
                 except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
@@ -1301,7 +1316,7 @@ def retoken(state, agents, agent, ms):
     if m not in ms:  # relayed (micro): only its own watcher reaches its server
         return False
     try:
-        call(ms[m][1], hiding(state, [a for a in agents if a["machine"] == m]))
+        call(ms[m][1], hiding(state, [a for a in agents if a["machine"] == m], ms[m][0]))
         return True
     except (OSError, subprocess.SubprocessError):
         return False

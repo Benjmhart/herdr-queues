@@ -47,4 +47,18 @@ ag = [{"pane_id": "p1", "tokens": {"queues_label": "x", "queues_heading": "h"}}]
 rq = lambda tk: ["pane.report_metadata", {"pane_id": "p1", "source": "s", "tokens": tk}]
 assert q.changed([rq({"queues_label": "x", "queues_heading_after": None}), ["agent.view.set", {}]], ag) == [["agent.view.set", {}]]
 assert len(q.changed([rq({"queues_heading": None})], ag)) == 1 and len(q.changed([rq({"queues_label": "y"})], ag)) == 1
+# heading entries (0.22): one list for every machine, sorted by queues_rank; each server shows its own headings
+st3 = {"queues": ["priority", "work"], "members": {}, "sort": "queues", "headings": "queue", "entries": True}
+b1, b2, b3 = A("p1", "a", "idle"), A("p2", "b", "blocked"), A("p3", "c", "idle")
+b2["host"] = "beast-arch"
+for a, qn in zip([b1, b2, b3], ["work", "priority", "priority"]):
+    q.put(st3, a, qn)
+ranks = sorted([(q.rank_of(st3, a), a["pane_id"]) for a in (b1, b2, b3)] + [(q.rank_of(st3, q=g), g) for g in q.groups_of(st3)])
+assert [p for _, p in ranks] == ["priority", "p2", "p3", "work", "p1", "unsorted"], ranks
+v = q.view(st3, "micro"); assert v["sort"][0]["field"] == {"token": "queues_rank"} and "micro" in str(v["filter"])
+assert q.view(dict(st3, entries=False), "micro") == q.VIEW
+st3["collapsed"] = ["priority"]
+t3 = {r[1]["pane_id"]: r[1]["tokens"] for r in q.hiding(st3, [b1, b2, b3]) if r[0] == "pane.report_metadata"}
+assert t3["p2"]["queues_inactive"] == "1" and t3["p3"]["queues_inactive"] == "1" and t3["p1"]["queues_inactive"] is None
+assert q.hiding(st3, [b1], "carbon")[-1][1] == q.view(st3, "carbon")
 print("ok")
