@@ -165,3 +165,13 @@ assert [a["host"] for a in q.others()] == ["carbon"]  # this machine's own come 
 _j.dump({"at": _tm.time() - 600, "agents": [{"host": "carbon", "pane_id": "p9"}]}, open(q.OTHERS, "w"))
 assert q.others() == []  # stale: the watcher stopped
 print("ok")
+
+# Windows / WSL (fleet 37): SendKeys text for the jump's keys
+assert q.sendkeys(names=["ctrl+b", "a", "slash"]) == "^ba/" and q.sendkeys(names=["Return"]) == "{ENTER}"
+assert q.sendkeys("a+b (x)~") == "a{+}b {(}x{)}{~}"
+
+# Windows titles herdr's window with the upper-case computer name (fleet 37, 2026-11-17)
+_w, q.windows = q.windows, lambda d=None: [("1", "WIN11VM: System32", True), ("2", "herdr: beast-arch: x", False), ("3", "Notes", False)]
+assert q.herdr_windows({"win11vm", "beast-arch"}) == [("1", "win11vm"), ("2", "beast-arch")]
+q.windows = _w
+print("ok")

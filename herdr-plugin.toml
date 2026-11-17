@@ -1,9 +1,9 @@
 id = "benjmhart.queues"
 name = "Queues"
-version = "0.33.0"
+version = "0.34.0"
 min_herdr_version = "0.9.3"
 description = "Your own queues (personal, work, ...) of the agents waiting on you, on every machine; Enter jumps there"
-platforms = ["linux", "macos"]
+platforms = ["linux", "macos", "windows"]
 
 # The working spinner (`spinner on`, `mark own`); exits at once when one already runs.
 [[startup]]

@@ -145,6 +145,20 @@ this server's own agents still works; on another machine's it does nothing visib
 
 `queues.py standalone` runs the same list outside herdr (bind it to a desktop key); it drives the window itself.
 
+### Windows
+
+The plugin runs on herdr's Windows build (Windows 11, herdr 0.9.5). Windows' own `python3` is a Microsoft Store stub,
+so install Python with python.org's **Python install manager**, which answers to `python3`, then
+`python3 -m pip install windows-curses` for the popup. The watcher drives Windows Terminal with user32 and SendKeys
+through one resident PowerShell; start it at logon without a console window, e.g. a Startup-folder shortcut to:
+
+```
+pythonw <the plugin's folder>\queues.py watch
+```
+
+(`herdr plugin list` prints the folder.) It reaches your other machines over ssh as on Linux; those machines run Linux
+or macOS. Under WSL, herdr inside WSL uses the same Windows driver through `powershell.exe` (written, not yet tested).
+
 ## One set of queues on every machine
 
 Each save also goes down the same request channel, and the watcher keeps the master copy on your desk and writes it
@@ -338,6 +352,9 @@ its own notification. A dimmed suggested prompt isn't counted.
 - The Goto guard reads the pane, not herdr's own dialogs: if another herdr dialog is open (the first-run setup on a fresh
   config), the keys go there and Return is still pressed.
 - The summary scrapes the visible screen and is tuned on Claude Code; other agents show their last line.
+- Windows is tested in a Windows 11 VM: the popup, a jump on that machine, the watcher, and the
+  Goto keys reaching herdr in Windows Terminal (prefix and key as separate SendKeys, or herdr misses the prefix). The
+  whole machine switch, Return included, is not yet seen end to end there, nor the notification balloon. WSL is untested.
 
 ## Upgrading from herdr-streams
 

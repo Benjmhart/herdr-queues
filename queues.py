@@ -21,11 +21,29 @@ each with one line of what it needs. Enter jumps to the agent, switching the her
 
 Standard library only. Data loads in a background thread, so keys never wait on the network.
 """
-import curses, glob, json, os, re, shlex, socket, subprocess, sys, threading, time
+import glob, json, os, re, shlex, socket, subprocess, sys, threading, time
 from concurrent.futures import ThreadPoolExecutor
+try:
+    import curses
+except ImportError:  # Windows Python ships none: the popup needs `py -m pip install windows-curses`, the rest runs
+    curses = None
+
+WIN = os.name == "nt"  # native Windows: herdr's socket is a named pipe; no fcntl, sh, tail or getuid
+UID = os.getuid() if hasattr(os, "getuid") else 0
+
+# Windows before Python 3.15 reads files and subprocess output as cp1252, and herdr's JSON is full of emoji: run again in
+# UTF-8 mode (a child, not exec: herdr waits on this process).
+if os.name == "nt" and not sys.flags.utf8_mode and __name__ == "__main__":
+    sys.exit(subprocess.call([sys.executable, "-X", "utf8", *sys.argv]))
+
+if WIN:  # no console window flashing up for each child of a windowless (pythonw) desk process; none needs one
+    _popen = subprocess.Popen.__init__
+    subprocess.Popen.__init__ = lambda self, *a, creationflags=0, **k: _popen(
+        self, *a, creationflags=creationflags | subprocess.CREATE_NO_WINDOW, **k)
 
 PLUGIN = "benjmhart.queues"
-STATE_ROOT = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+STATE_ROOT = (os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")) if os.name != "nt" else \
+    os.environ["LOCALAPPDATA"]  # where herdr puts plugin state on Windows (HERDR_PLUGIN_STATE_DIR, herdr 0.9.5)
 STATE_DIR = os.environ.get("HERDR_PLUGIN_STATE_DIR") or os.path.join(STATE_ROOT, "herdr/plugins", PLUGIN)
 STATE = os.path.join(STATE_DIR, "queues.json")
 OLD_STATE = os.path.join(STATE_ROOT, "herdr/plugins/benjmhart.streams/streams.json")  # herdr-streams <= 0.3
@@ -427,14 +445,33 @@ def move(state, live, queue, agent, d, everyone=True):
 # herdr's agent panel (ui.agent_panel_sort = "spaces") follows the workspace order, so it moves too. workspace.move is
 # a socket call the CLI lacks: run here, or over ssh on another machine (not one this one can't reach, e.g. micro).
 
-CALLS = r'''
-import json, os, socket, sys
-P = os.environ.get("HERDR_SOCKET_PATH") or os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "herdr/herdr.sock")
-for method, params in json.loads(sys.argv[1]):
+# One request to this machine's herdr: a Unix socket, or on Windows a named pipe (herdr's socket API docs). A string,
+# because CALLS runs it over ssh on other machines too.
+RPC = r'''
+import json, os, socket
+def herdr_path():
+    p = os.environ.get("HERDR_SOCKET_PATH")
+    if os.name == "nt":  # a path-shaped name in the pipe namespace (herdr 0.9.5): \\.\pipe\C:\...\herdr.sock
+        p = p or os.path.join(os.environ["APPDATA"], "herdr", "herdr.sock")
+        return p if p.startswith("\\\\.\\pipe\\") else "\\\\.\\pipe\\" + p
+    return p or os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "herdr/herdr.sock")
+def rpc(method, params, rid="q", timeout=3):
+    line = (json.dumps({"id": rid, "method": method, "params": params}) + "\n").encode()
+    if os.name == "nt":
+        with open(herdr_path(), "r+b", buffering=0) as f:
+            f.write(line)
+            return json.loads(f.readline())
     with socket.socket(socket.AF_UNIX) as s:
-        s.connect(P)
-        s.sendall((json.dumps({"id": "q", "method": method, "params": params}) + "\n").encode())
-        s.makefile().readline()
+        s.settimeout(timeout)
+        s.connect(herdr_path())
+        s.sendall(line)
+        return json.loads(s.makefile().readline())
+'''
+exec(RPC)
+CALLS = RPC + r'''
+import sys
+for method, params in json.loads(sys.argv[1]):
+    rpc(method, params)
 '''
 
 
@@ -757,26 +794,38 @@ def setting(state, cmd, args):
     return None
 
 
+def file_lock(f, wait=True):
+    """An exclusive lock on an open file, held until it is closed; False if wait is False and someone has it."""
+    if WIN:
+        import msvcrt
+        while True:
+            try:
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                return True
+            except OSError:
+                if not wait:
+                    return False
+                time.sleep(0.1)
+    import fcntl
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+        return True
+    except OSError:
+        return False
+
+
 def sock(method, params):
     """One request to this machine's herdr; the parsed response."""
-    path = os.environ.get("HERDR_SOCKET_PATH") or os.path.join(
-        os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "herdr/herdr.sock")
-    with socket.socket(socket.AF_UNIX) as sk:
-        sk.settimeout(3)
-        sk.connect(path)
-        sk.sendall((json.dumps({"id": "spin", "method": method, "params": params}) + "\n").encode())
-        return json.loads(sk.makefile().readline())
+    return rpc(method, params, "spin")
 
 
 def spin_loop():
     """Started by herdr with the server (the manifest's startup): turns the working mark of this machine's agents,
     4 frames a second, while `spinner on` and `mark own`. Only the label's mark changes; one process per server."""
-    import fcntl
     os.makedirs(STATE_DIR, exist_ok=True)
     lock = open(os.path.join(STATE_DIR, "spin.lock"), "w")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    if not file_lock(lock, wait=False):
         sys.exit(0)
     state, seen, i, checked = {}, None, 0, time.time()
     while True:
@@ -875,10 +924,9 @@ def others():
 def entries_sync(state, listed):
     """This machine's heading entries, one per queue: create, relabel, close. The agent view orders them (queues_rank).
     Under a lock, re-reading herdr: hooks and the watcher run it at the same time."""
-    import fcntl
     os.makedirs(STATE_DIR, exist_ok=True)
     with open(os.path.join(STATE_DIR, "entries.lock"), "w") as lk:
-        fcntl.flock(lk, fcntl.LOCK_EX)
+        file_lock(lk)
         # By token, not by agent: herdr re-detects a new pane once its shell is up and drops the reported agent, so the
         # agent is reported again whenever it is missing (else every pass made another heading: 2026-11-15 sandbox).
         heads_here = [p for p in json.loads(herdr(None, "pane", "list"))["result"]["panes"]
@@ -964,13 +1012,10 @@ def focused():
 def refresh(fresh_info=True):
     """This machine's tokens and heading entries. Runs coalesce: herdr fires a burst of events (each heading change is
     one), so a run that finds another going marks it to go round once more and exits."""
-    import fcntl
     os.makedirs(STATE_DIR, exist_ok=True)
     again = os.path.join(STATE_DIR, "refresh.again")
     lk = open(os.path.join(STATE_DIR, "refresh.lock"), "w")
-    try:
-        fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    if not file_lock(lk, wait=False):
         open(again, "w").close()
         return
     for _ in range(3):
@@ -1020,7 +1065,8 @@ def refresh_once(fresh_info=True):
 
 
 def machine_icons():
-    path = os.path.expanduser("~/.config/herdr/plugins/config/benjmhart.machine-icons/icons")
+    path = os.path.join(os.environ["APPDATA"] if WIN else os.path.expanduser("~/.config"),
+                        "herdr", "plugins", "config", "benjmhart.machine-icons", "icons")
     try:
         return dict(ln.split()[:2] for ln in open(path, encoding="utf-8") if len(ln.split()) >= 2 and ln[0] != "#")
     except OSError:
@@ -1215,7 +1261,7 @@ def resort(state, agents, ms):
 # request to its own REQUESTS file, and `queues.py watch` on the machine you sit at follows that file on every
 # machine (over ssh, as herdr itself reaches them) and drives the window that is showing the requesting machine.
 
-RUN = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+RUN = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{UID}"
 
 
 def live(*paths):
@@ -1236,7 +1282,7 @@ def newest(pattern):
 
 
 def sway_socket():
-    return live(os.environ.get("SWAYSOCK"), *newest(f"sway-ipc.{os.getuid()}.*.sock"))
+    return live(os.environ.get("SWAYSOCK"), *newest(f"sway-ipc.{UID}.*.sock"))
 
 
 def hypr_sig():
@@ -1247,14 +1293,17 @@ def hypr_sig():
 
 def running(name):
     try:
-        return subprocess.run(["pgrep", "-x", "-u", str(os.getuid()), name], capture_output=True).returncode == 0
+        return subprocess.run(["pgrep", "-x", "-u", str(UID), name], capture_output=True).returncode == 0
     except OSError:
         return False
 
 
 def desktop():
     """sway, hyprland, kde, gnome (Wayland sessions) or x11. KWin and GNOME Shell only count with a Wayland socket:
-    on X11 they are driven like any X11 window manager."""
+    on X11 they are driven like any X11 window manager. windows: Windows itself, or WSL (its herdr window is a Windows
+    Terminal window, even with WSLg's DISPLAY set)."""
+    if WIN or wsl():
+        return "windows"
     if sway_socket():
         return "sway"
     if hypr_sig():
@@ -1267,9 +1316,9 @@ def desktop():
     return "x11"
 
 
-def tool(*cmd, env=None):
+def tool(*cmd, env=None, timeout=5):
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=5).stdout
+        return subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=timeout).stdout
     except (OSError, subprocess.TimeoutExpired):
         return ""
 
@@ -1317,6 +1366,128 @@ def wayland_env():
     return env
 
 
+# Windows, natively or from WSL (powershell.exe through WSL's interop): user32 lists and raises windows, SendKeys types
+# (station-maintenance fleet 37, 2026-11-16). One resident PowerShell per process: starting one costs ~0.3 s (3.5 s in
+# a starved VM) and a jump makes a dozen calls.
+def wsl():
+    try:
+        with open("/proc/version") as f:
+            return "microsoft" in f.read().lower()
+    except OSError:
+        return False
+
+
+WINPS = r'''
+Add-Type -TypeDefinition @"
+using System; using System.Text; using System.Runtime.InteropServices;
+public class HQ {
+  public delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc f, IntPtr l);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
+  [DllImport("user32.dll")] public static extern void keybd_event(byte k, byte s, uint f, UIntPtr e);
+}
+"@
+function Main($op, $arg) {
+  if ($op -eq "list") {
+    $fg = [HQ]::GetForegroundWindow(); $out = New-Object Collections.ArrayList
+    [void][HQ]::EnumWindows({ param($h, $l)
+      if ([HQ]::IsWindowVisible($h)) {
+        $sb = New-Object Text.StringBuilder 512; [void][HQ]::GetWindowText($h, $sb, 512)
+        if ($sb.Length) { [void]$out.Add(("{0}`t{1}`t{2}" -f $h, [int]($h -eq $fg), $sb)) } }
+      $true }, [IntPtr]::Zero)
+    $out
+  } elseif ($op -eq "focus") {
+    $h = [IntPtr][long]$arg
+    if ([HQ]::IsIconic($h)) { [void][HQ]::ShowWindow($h, 9) }
+    [HQ]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero); [HQ]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)  # Alt: lifts the foreground lock
+    [void][HQ]::SetForegroundWindow($h)
+  } elseif ($op -eq "keys") {
+    Add-Type -AssemblyName System.Windows.Forms  # one key per line, apart: herdr misses a prefix sent in one burst
+    foreach ($k in $arg -split "`n") { [System.Windows.Forms.SendKeys]::SendWait($k); Start-Sleep -Milliseconds 150 }
+  } elseif ($op -eq "locked") {
+    if (Get-Process LogonUI -ErrorAction SilentlyContinue) { "1" } else { "0" }
+  } elseif ($op -eq "notify") {
+    Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing
+    if ($script:n) { $script:n.Dispose() }  # the last one; this process stays, so the balloon outlives the call
+    $script:n = New-Object System.Windows.Forms.NotifyIcon; $script:n.Icon = [System.Drawing.SystemIcons]::Information
+    $script:n.Visible = $true; $script:n.ShowBalloonTip(10000, "Agents waiting on you", $arg, "Info")
+  }
+}
+# One operation per stdin line, "<op><tab><base64 UTF-8 arg>"; its output, then the end marker.
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+while ($null -ne ($line = [Console]::In.ReadLine())) {
+  $op, $b = $line -split "`t", 2
+  try { $r = Main $op ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b))) | Out-String } catch { $r = "" }
+  [Console]::Out.Write($r); [Console]::Out.WriteLine("--hq-end--"); [Console]::Out.Flush()
+}
+'''
+
+
+WINPS_PROC, WINPS_LOCK = [None], threading.Lock()
+
+
+def winps(op, arg=""):
+    """One WINPS operation in this process's resident PowerShell (started on first use, again if it died); its output,
+    "" on failure. Script and argument go base64-encoded, so no quoting reaches a shell. A call stuck 30 s (90 s with the start) kills it."""
+    import base64
+    with WINPS_LOCK:
+        p, wait = WINPS_PROC[0], 30
+        try:
+            if p is None or p.poll() is not None:
+                wait = 90  # starting: ~0.3 s on a desk, 30 s in a starved VM's desktop session (fleet 37)
+                enc = base64.b64encode(WINPS.encode("utf-16-le")).decode()
+                p = WINPS_PROC[0] = subprocess.Popen(
+                    ["powershell" if WIN else "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", enc],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, encoding="utf-8")
+            p.stdin.write(op + "\t" + base64.b64encode(str(arg).encode()).decode() + "\n")
+            p.stdin.flush()
+            guard = threading.Timer(wait, p.kill)
+            guard.start()
+            out = []
+            for ln in p.stdout:
+                if ln.rstrip("\r\n") == "--hq-end--":
+                    guard.cancel()
+                    return "".join(out)
+                out.append(ln)
+            guard.cancel()
+        except OSError:
+            pass
+        WINPS_PROC[0] = None  # died or was killed: the next call starts a fresh one (never re-sends this one's keys)
+        return ""
+
+
+SENDKEYS_SPECIAL = set("+^%~(){}[]")
+SENDKEYS_NAMES = {"slash": "/", "Return": "{ENTER}", "ctrl": "^", "shift": "+", "alt": "%"}
+
+
+def sendkeys(text=None, names=()):
+    """SendKeys syntax: literal text escaped, or key names ("ctrl+b", "slash", "Return") as press() takes them."""
+    if text is not None:
+        return "".join("{%s}" % c if c in SENDKEYS_SPECIAL else c for c in text)
+    out = ""
+    for n in names:
+        *mods, k = n.split("+")
+        k = SENDKEYS_NAMES.get(k, k)
+        out += "".join(SENDKEYS_NAMES[m] for m in mods) + ("{%s}" % k if k in SENDKEYS_SPECIAL else k)
+    return out
+
+
+def notify(text):
+    """A desktop notification: notify-send, or a Windows balloon (natively or from WSL)."""
+    try:
+        if desktop() == "windows":
+            winps("notify", text)
+        else:
+            subprocess.run(["notify-send", "-a", "herdr-queues", "Agents waiting on you (mod+shift+s)", text], timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
 # Key names the jump sends, per tool. wtype: the virtual-keyboard protocol (sway, Hyprland and other wlroots
 # compositors); ydotool: a uinput keyboard (any desktop; KWin and GNOME refuse virtual keyboards), needs ydotoold.
 YDO = {"ctrl": 29, "shift": 42, "alt": 56, "slash": 53, "Return": 28,
@@ -1325,6 +1496,9 @@ YDO = {"ctrl": 29, "shift": 42, "alt": 56, "slash": 53, "Return": 28,
 
 def press(d, *names):
     """Press keys: "ctrl+b", "shift+g", "slash", "Return"."""
+    if d == "windows":
+        winps("keys", "\n".join(sendkeys(names=[n]) for n in names))
+        return
     if d == "x11":
         x11("key", "--clearmodifiers", *names)
         return
@@ -1344,7 +1518,8 @@ def goto_keys():
     by default it is nothing while prefix+s is settings, where blind keys moved about (headless sway, 2026-11-16)."""
     try:
         import tomllib
-        cfg = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "herdr", "config.toml")
+        cfg = os.path.join(os.environ["APPDATA"] if WIN else os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+                           "herdr", "config.toml")
         try:
             with open(cfg, "rb") as f:
                 k = tomllib.load(f).get("keys", {})
@@ -1359,7 +1534,9 @@ def goto_keys():
 
 
 def type_text(d, text):
-    if d == "x11":
+    if d == "windows":
+        winps("keys", sendkeys(text))
+    elif d == "x11":
         x11("type", "--delay", "8", text)
     elif d in ("sway", "hyprland"):
         tool("wtype", "-d", "8", text, env=wayland_env())
@@ -1372,7 +1549,12 @@ def windows(d=None):
     d = d or desktop()
     out = []
     try:
-        if d == "sway":
+        if d == "windows":
+            for ln in winps("list").splitlines():
+                h, f, title = (ln.split("\t", 2) + ["", ""])[:3]
+                if h.strip().isdigit():
+                    out.append((h.strip(), title.strip(), f == "1"))
+        elif d == "sway":
             todo = [json.loads(sway("-t", "get_tree", "-r"))]
             while todo:
                 n = todo.pop()
@@ -1397,7 +1579,9 @@ def windows(d=None):
 
 
 def focus(d, w):
-    if d == "sway":
+    if d == "windows":
+        winps("focus", w)
+    elif d == "sway":
         sway(f"[con_id={w}] focus")
     elif d == "hyprland":
         # Hyprland 0.57 (Lua config) parses dispatch as Lua: the old form is an error there (Arch VM, 2026-11-16).
@@ -1415,10 +1599,10 @@ def focus(d, w):
 
 def herdr_windows(hosts, d=None):
     """[(window id, host it shows)] of herdr windows, the active one first. Title: "[herdr: ]<hostname>: <workspace>"."""
-    out = []
+    out, canon = [], {h.lower(): h for h in hosts}  # Windows titles it with the upper-case computer name
     for w, title, _ in windows(d):
-        h = title.removeprefix("herdr: ").split(": ", 1)[0]
-        if h in hosts:
+        h = canon.get(title.removeprefix("herdr: ").split(": ", 1)[0].lower())
+        if h:
             out.append((w, h))
     return out
 
@@ -1471,7 +1655,7 @@ def jump(machine, pane, ms=None, shown_by=None):
         press(d, "Return")
         for _ in range(30):
             time.sleep(0.1)
-            if window_title(win[0], d).removeprefix("herdr: ").startswith(target + ": "):
+            if window_title(win[0], d).removeprefix("herdr: ").lower().startswith(target.lower() + ": "):
                 break
     herdr(machine, "agent", "focus", pane)
 
@@ -1497,8 +1681,40 @@ def die_with_parent():
         pass
 
 
+CHILD = {} if WIN else {"preexec_fn": die_with_parent}  # Windows takes no preexec_fn
+
+# `tail -n0 -F FILE` in Python, so the watcher follows this machine's requests on Windows too (no sh, no tail there).
+TAIL = r'''
+import os, sys, time
+p = sys.argv[1]
+os.makedirs(os.path.dirname(p), exist_ok=True)
+open(p, "a").close()
+f, buf = open(p), ""
+f.seek(0, 2)
+while True:
+    chunk = f.read()
+    if chunk:
+        buf += chunk
+        while "\n" in buf:
+            ln, buf = buf.split("\n", 1)
+            sys.stdout.write(ln + "\n")
+        sys.stdout.flush()
+        continue
+    try:
+        if os.path.getsize(p) < f.tell():  # truncated (request() empties it past 64 KiB)
+            f.seek(0)
+            buf = ""
+    except OSError:
+        pass
+    time.sleep(0.2)
+'''
+
+
 def locked(d):
-    """A lock screen up: a locker process, or GNOME's / KDE's own (no process of their own; asked over D-Bus)."""
+    """A lock screen up: a locker process, or GNOME's / KDE's own (no process of their own; asked over D-Bus), or
+    Windows' (LogonUI running)."""
+    if d == "windows":
+        return winps("locked").strip() == "1"
     if any(running(p) for p in ("xsecurelock", "i3lock", "slock", "swaylock", "xlock", "hyprlock")):
         return True
     if d == "gnome":
@@ -1546,12 +1762,12 @@ def follow(label, ms):
     shown_by, target = ms[label]
     path = os.path.expanduser(REQUESTS) if not target else REMOTE_REQUESTS
     sh = f'mkdir -p "$(dirname {path})" && touch {path} && exec tail -n0 -F {path}'
-    cmd = ["sh", "-c", sh] if not target else [
+    cmd = [sys.executable, "-u", "-c", TAIL, path] if not target else [
         "ssh", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ConnectTimeout=10", target, sh]
     by_host = {h: lab for lab, (h, _) in ms.items()}
     while True:
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
-                             text=True, preexec_fn=die_with_parent)
+                             text=True, **CHILD)
         for ln in p.stdout:
             if ln.startswith("state "):
                 try:
@@ -1613,7 +1829,7 @@ def relay(ms):
                     p = pipes[t] = subprocess.Popen(
                         ["ssh", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ConnectTimeout=10", t,
                          "python3 -u -c " + shlex.quote(RELAY_SINK)], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL, text=True, preexec_fn=die_with_parent)
+                        stderr=subprocess.DEVNULL, text=True, **CHILD)
                 try:
                     if p and p.poll() is None:
                         p.stdin.write(line)
@@ -1640,12 +1856,9 @@ def on_state_change():
 
 
 def watch(notify=True):
-    import fcntl
     os.makedirs(STATE_DIR, exist_ok=True)
     lock = open(os.path.join(STATE_DIR, "watch.lock"), "w")
-    try:  # one watcher per user: two would type into the window together
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    if not file_lock(lock, wait=False):  # one watcher per user: two would type into the window together
         sys.exit("herdr-queues: a watcher is already running")
     ms = machines(learn=True)
     publish_version()
@@ -1673,6 +1886,7 @@ def publish_version():
 def skew(state, ms):
     """"" when every machine runs this version, else what differs ("carbon ?" = a release older than 0.32)."""
     vs = dict.fromkeys((h for h, _ in ms.values()), "?") | (state.get("versions") or {})
+    vs[HOST] = VERSION  # this copy, whether or not its watcher has published yet
     odd = sorted(f"{h} {v}" for h, v in vs.items() if v != VERSION)
     return f"herdr-queues {VERSION} here; differs: {', '.join(odd)} (same version on every machine)" if odd else ""
 
@@ -1803,11 +2017,7 @@ def nag(ms, notify=True):
         now = time.time()
         due = nag_due(seen, ags, now) + unsent_due(unsent, prompts, now)
         if due:
-            try:
-                subprocess.run(["notify-send", "-a", "herdr-queues", "Agents waiting on you (mod+shift+s)", "\n".join(due)],
-                               timeout=10)
-            except (OSError, subprocess.TimeoutExpired):
-                pass
+            notify("\n".join(due))
         time.sleep(60)
 
 
@@ -1824,7 +2034,7 @@ WHEEL_DOWN = getattr(curses, "BUTTON5_PRESSED", 0x200000)  # ncurses 6; older Py
 ARROWS = {"A": "up", "B": "down", "C": "right", "D": "left"}
 NAMED = {curses.KEY_NPAGE: "pgdn", curses.KEY_PPAGE: "pgup", curses.KEY_HOME: "home", curses.KEY_END: "end",
          curses.KEY_UP: "up", curses.KEY_DOWN: "down", curses.KEY_LEFT: "left", curses.KEY_RIGHT: "right",
-         curses.KEY_ENTER: "enter", curses.KEY_BTAB: "left", curses.KEY_BACKSPACE: "backspace"}
+         curses.KEY_ENTER: "enter", curses.KEY_BTAB: "left", curses.KEY_BACKSPACE: "backspace"} if curses else {}
 
 
 LATER = "saved; the sidebar follows within a minute (the watcher on your desk applies it)"
@@ -2309,6 +2519,9 @@ def ui(scr):
 
 def main(cmd):
     if cmd in ("ui", "standalone"):
+        if curses is None:  # Windows: Python has no curses of its own
+            input("herdr-queues: the list needs curses. On Windows: py -m pip install windows-curses\n(Enter closes) ")
+            return
         curses.wrapper(ui)
     elif cmd == "jump":
         time.sleep(0.3)  # let the list close first
@@ -2366,12 +2579,8 @@ def main(cmd):
     elif cmd == "watch":
         watch(notify="--no-notify" not in sys.argv[2:])
     elif cmd == "open":
-        with socket.socket(socket.AF_UNIX) as sk:
-            sk.connect(os.environ["HERDR_SOCKET_PATH"])
-            sk.sendall((json.dumps({"id": "queues", "method": "plugin.pane.open", "params": {
-                "plugin_id": os.environ["HERDR_PLUGIN_ID"], "entrypoint": "ui", "focus": True,
-                "width": "98%", "height": "96%"}}) + "\n").encode())
-            resp = json.loads(sk.makefile().readline())
+        resp = rpc("plugin.pane.open", {"plugin_id": os.environ["HERDR_PLUGIN_ID"], "entrypoint": "ui", "focus": True,
+                                        "width": "98%", "height": "96%"}, "queues")
         if "error" in resp:
             raise RuntimeError(f"plugin.pane.open: {resp['error']}")
     else:
