@@ -107,7 +107,7 @@ q.tool = real_tool
 print("ok")
 import os, tempfile
 with tempfile.TemporaryDirectory() as t:
-    os.environ["XDG_CONFIG_HOME"] = t
+    os.environ["APPDATA" if q.WIN else "XDG_CONFIG_HOME"] = t  # where goto_keys reads herdr's config
     assert q.goto_keys() == ["ctrl+b", "g"]  # no config: herdr's defaults
     os.makedirs(f"{t}/herdr")
     open(f"{t}/herdr/config.toml", "w").write('[keys]\nprefix = "ctrl+a"\ngoto = ["prefix+a", "prefix+g"]\n')
