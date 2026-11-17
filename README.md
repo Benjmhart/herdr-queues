@@ -58,6 +58,39 @@ description = "agents waiting on me, by queue"
 Python 3 standard library only. Install it on every machine you connect to with `herdr machine`, since the popup
 runs on whichever machine the window is showing.
 
+## Several machines: setup
+
+The sections below explain each part; this is the whole list. Your **desk** is a machine you sit at (its herdr window
+connects to the others with `herdr machine`).
+
+1. **The plugin on every machine, the same version.** The shared queues change meaning between releases (0.28's sort
+   order, 0.31's folder keys). The popup opens with a line naming any machine on another version (`?` = older than
+   0.32, which doesn't report one). An outbound-only machine can only be updated from itself.
+2. **`herdr machine add` for each other machine, on each desk.** The popup lists the server it runs on plus those.
+3. **ssh from each desk to each machine, with no prompt** (`BatchMode`: a key or agent, the same target herdr uses).
+   The watcher asks each machine its hostname once (`uname -n`, cached in `hosts.json` in the plugin's state), so a
+   target may be an alias or an IP. Until it has asked (or if it can't), the name is guessed from the target
+   (`user@beast-arch.lan` → `beast-arch`), and a wrong guess files that machine's agents under a second name.
+4. **The watcher on each desk** (`queues.py watch`, with your desktop session; `--no-notify` where you don't want
+   notifications). It carries out jumps, keeps the queues the same everywhere, keeps the sidebar marks up, and counts
+   what a collapsed queue hides.
+5. **The keybinding on each machine's herdr** (the popup runs where the window is).
+
+Which machine needs ssh to which:
+
+| Feature | Who connects | Without it |
+|---|---|---|
+| Popup lists another machine's agents | popup's server → machine (herdr's own connection) | that machine's watcher sends its list instead (outbound from it) |
+| Enter: jump to an agent | desk watcher → every machine (ssh, follows requests) | Enter on that machine's agents does nothing visible |
+| Same queues everywhere | desk watcher → every machine (ssh) | each machine keeps its own copy |
+| Sidebar marks, headings, inactive, `+N` | each machine for itself; desk watcher → machines once a minute | that machine's sidebar updates only on its own events |
+| `s`: reorder workspaces | popup's server → machine (ssh) | that machine keeps its order |
+| Hostnames | desk watcher → machine (ssh, once) | guessed from the ssh target |
+
+**An outbound-only machine** (nothing can ssh into it) works when it is a desk: its watcher reaches the others, and it
+sends its own agents to them so their popups list it. What can't reach it: another desk's watcher (so jumps and
+queue changes from there arrive only through its own watcher), and an update of the plugin from elsewhere.
+
 ## The sidebar in queue order
 
 `s` in the popup sorts herdr's sidebar on every machine by your queues: workspaces holding agents of the first queue
@@ -183,8 +216,9 @@ carries a `queues_rank` token (its queue, your `J`/`K` order, in auto order its 
 and every server's agent view sorts by it, so each queue has one heading with its agents from all machines under it.
 The view of the server you are looking at applies to the whole list, so every server keeps a set of headings and its
 view shows only its own (token `queues_heading_host`); a click lands on the server you are looking at. Every queue
-gets a heading, empty or not (`unsorted` last), and a collapsed heading shows no `+N` (no one machine sees every
-agent). What it costs:
+gets a heading, empty or not (`unsorted` last). A collapsed heading counts what it hides on every machine
+(`▸ unsorted +2`): each machine writes its own share into the shared queues and the headings add them up, so a
+machine that is off keeps its last share until it runs again. What it costs:
 
 - herdr reports a click and a keyboard switch alike, so **landing on a heading by any route toggles it**: cycling
   workspaces with the keyboard, or picking it in `prefix+a`. Focus is handed back, with a brief flash.

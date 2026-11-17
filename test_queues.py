@@ -126,3 +126,25 @@ assert q.folder(other) not in [q.keys(new)] and "micro/d:/p/station" not in q.ke
 assert q.queue_colour({"queues": ["priority", "work"]}, "priority") == "red"  # 0.30 default colours
 assert q.queue_colour({"queues": ["priority"], "colors": {"priority": None}}, "priority") is None
 print("ok")
+
+# 0.32.0 (micro's multi-host review): collapsed counts, real hostnames, version skew
+sc = {"queues": ["priority"], "members": {"micro/t:a": "priority"}, "collapsed": ["unsorted", "priority"]}
+la = [{"pane_id": "p1", "host": "micro", "terminal_id": "a"}, {"pane_id": "p2", "host": "micro", "terminal_id": "b"},
+      {"pane_id": "p3", "host": "micro", "terminal_id": "c"}]
+sc["inactive"] = q.keys(la[2])
+assert q.hidden_counts(sc, la) == {"priority": 1, "unsorted": 1}  # inactive ones aren't counted (they're hidden anyway)
+assert q.heading_text(sc, "unsorted", 2, True) == "▸ unsorted +2"
+import json as _j, tempfile as _t
+q.HOSTS = os.path.join(_t.mkdtemp(), "hosts.json")
+q.herdr = lambda m, *a, **k: "id\tdesk\tben@100.64.0.5\tdefault\tenabled\nid\tcarbon\tcarbon\tdefault\tenabled\n"
+assert q.machines()["desk"][0] == "100"  # the old guess, until learned
+q.hostname_of = lambda t: {"ben@100.64.0.5": "beast-arch"}.get(t)  # carbon unreachable: not cached, guessed
+ms = q.machines(learn=True)
+assert ms["desk"] == ("beast-arch", "ben@100.64.0.5") and ms["carbon"][0] == "carbon"
+assert _j.load(open(q.HOSTS)) == {"ben@100.64.0.5": "beast-arch"} and q.machines()["desk"][0] == "beast-arch"
+sv = {"versions": {q.HOST: q.VERSION, "beast-arch": q.VERSION}}
+assert q.skew(sv, ms) == "" or "carbon ?" in q.skew(sv, ms)
+assert "carbon ?" in q.skew(sv, ms) and "beast-arch" not in q.skew(sv, ms)
+sv["versions"]["carbon"] = "0.31.0"; assert "carbon 0.31.0" in q.skew(sv, ms)
+sv["versions"]["carbon"] = q.VERSION; assert q.skew(sv, ms) == ""
+print("ok")

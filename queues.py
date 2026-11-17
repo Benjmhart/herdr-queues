@@ -35,6 +35,13 @@ HERDR = os.environ.get("HERDR_BIN_PATH", "herdr")
 STANDALONE = "HERDR_PLUGIN_ID" not in os.environ
 HOST = socket.gethostname()
 REMOTE_STATE = "~/.local/state/herdr/plugins/" + PLUGIN + "/queues.json"
+try:
+    import tomllib
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "herdr-plugin.toml"), "rb") as _f:
+        VERSION = tomllib.load(_f).get("version", "?")
+except (ImportError, OSError, ValueError):
+    VERSION = "?"
+HOSTS = os.path.join(STATE_DIR, "hosts.json")  # {ssh target: that machine's hostname}, learned by the watcher
 RELAY = os.path.join(STATE_DIR, "relay")  # <host>.json: agents of a machine this one can't reach (micro), sent by it
 ICON = {"working": "●", "blocked": "!", "done": "✓", "idle": "○"}
 WAITING = ("blocked", "done")
@@ -52,17 +59,48 @@ def herdr(machine, *args, timeout=5):
     return r.stdout
 
 
-def machines():
-    """{label: (hostname, ssh target)} of the enabled machines; "" is this server (no ssh target)."""
-    out = {"": (socket.gethostname(), None)}
+def machines(learn=False):
+    """{label: (hostname, ssh target)} of the enabled machines; "" is this server (no ssh target). The hostname is what
+    that machine's own HOST is, so membership keys and jump requests agree whichever machine wrote them: asked once
+    over ssh (`uname -n`, by the watcher: learn=True) and cached in HOSTS. Until then it is guessed from the target
+    ("user@beast-arch.lan" -> "beast-arch"), wrong for an alias or an IP (micro's review, 2026-11-16).
+    ponytail: cached for good; delete hosts.json after renaming a machine."""
+    out, targets = {"": (HOST, None)}, {}
     try:
         for ln in herdr(None, "machine", "list").splitlines():
             f = ln.split("\t")
             if len(f) >= 5 and f[4] == "enabled":
-                out[f[1]] = (f[2].split("@")[-1].split(".")[0], f[2])
+                targets[f[1]] = f[2]
     except (RuntimeError, OSError, subprocess.TimeoutExpired):
         pass
+    try:
+        with open(HOSTS) as fh:
+            known = json.load(fh)
+    except (OSError, ValueError):
+        known = {}
+    new = [t for t in set(targets.values()) if t not in known] if learn else []
+    if new:
+        with ThreadPoolExecutor(len(new)) as ex:
+            for t, name in zip(new, ex.map(hostname_of, new)):
+                if name:
+                    known[t] = name
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(HOSTS + ".tmp", "w") as fh:
+            json.dump(known, fh, indent=1, sort_keys=True)
+        os.replace(HOSTS + ".tmp", HOSTS)
+    for lab, t in targets.items():
+        out[lab] = (known.get(t) or t.split("@")[-1].split(".")[0], t)
     return out
+
+
+def hostname_of(target):
+    try:
+        r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", target, "uname -n"],
+                           capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    name = r.stdout.strip()
+    return name if r.returncode == 0 and re.fullmatch(r"[\w.-]{1,64}", name) else None
 
 
 def screen(machine, pane):
@@ -783,6 +821,19 @@ def heading_text(state, q, n_hidden, collapsed):
     return (f"▸ {name} +{n_hidden}" if collapsed and n_hidden else f"▸ {name}" if collapsed else f"▾ {name}")
 
 
+def hidden_counts(state, listed):
+    """{collapsed queue: agents of this machine it hides}. A heading entry belongs to one server, which sees only its
+    own agents, so each machine writes its share into the state and every heading adds them up ("▸ unsorted +1"; the
+    micro agent vanished into collapsed unsorted without one, 2026-11-16). ponytail: a machine that goes away keeps its
+    last share until it runs again."""
+    collapsed, out = set(state.get("collapsed", [])), {}
+    for a in listed:
+        q = queue_of(state, a)
+        if q in collapsed and not inactive(state, a):
+            out[q] = out.get(q, 0) + 1
+    return out
+
+
 def entries_sync(state, listed):
     """This machine's heading entries, one per queue: create, relabel, close. The agent view orders them (queues_rank).
     Under a lock, re-reading herdr: hooks and the watcher run it at the same time."""
@@ -809,6 +860,11 @@ def entries_sync(state, listed):
         if not want:
             return
         groups = groups_of(state)
+        mine = hidden_counts(state, listed)
+        if (state.get("collapsed_counts") or {}).get(HOST, {}) != mine:  # this machine's share, for every heading
+            state.setdefault("collapsed_counts", {})[HOST] = mine
+            save(state)
+        total = lambda q: sum((c or {}).get(q, 0) for c in (state.get("collapsed_counts") or {}).values())
         for q in list(have):
             if q not in groups:
                 herdr(None, "workspace", "close", have.pop(q)["workspace_id"])
@@ -819,7 +875,7 @@ def entries_sync(state, listed):
             if h.get("agent") != HEAD_AGENT or h.get("status") != "unknown":  # "·": herdr's quietest state_icon
                 herdr(None, "pane", "report-agent", h["pane_id"], "--source", HEAD_SOURCE, "--agent", HEAD_AGENT, "--state", "unknown")
         for q in groups:
-            text = heading_text(state, q, 0, q in collapsed)  # ponytail: no "+N": no one machine sees every agent
+            text = heading_text(state, q, total(q), q in collapsed)
             toks = {"queues_heading_for": q, "queues_label": text + colour(q), "queues_rank": rank_of(state, q=q),
                     "queues_heading_host": HOST}
             h = have.get(q)
@@ -1560,7 +1616,8 @@ def watch(notify=True):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         sys.exit("herdr-queues: a watcher is already running")
-    ms = machines()
+    ms = machines(learn=True)
+    publish_version()
     if os.path.exists(STATE):  # this desk's queues are the master copy: every machine starts from them
         threading.Thread(target=push, args=(load(), ms, ""), daemon=True).start()
     for label in ms:
@@ -1571,6 +1628,22 @@ def watch(notify=True):
     while True:
         time.sleep(60)
         follow_install(lock)
+
+
+def publish_version():
+    """This machine's plugin version into the shared state: the state's meaning changes between releases (0.28's rank
+    order, 0.31's folder keys), so the popup says when machines differ (micro's review, 2026-11-16)."""
+    state = load()
+    if (state.get("versions") or {}).get(HOST) != VERSION:
+        state.setdefault("versions", {})[HOST] = VERSION
+        save(state)
+
+
+def skew(state, ms):
+    """"" when every machine runs this version, else what differs ("carbon ?" = a release older than 0.32)."""
+    vs = dict.fromkeys((h for h, _ in ms.values()), "?") | (state.get("versions") or {})
+    odd = sorted(f"{h} {v}" for h, v in vs.items() if v != VERSION)
+    return f"herdr-queues {VERSION} here; differs: {', '.join(odd)} (same version on every machine)" if odd else ""
 
 
 def follow_install(lock):
@@ -1970,6 +2043,7 @@ def ui(scr):
     # Every agent in the queue, waiting ones first (Ben 2026-11-14: a queue is worked through, so all of it shows);
     # `a` narrows it to the ones waiting on you. The number on a tab counts the waiting ones.
     state, cur, sel, everyone, msg, drawn, top = load(), None, 0, True, "", None, 0
+    msg = skew(state, ms)
 
     seen = None
     while True:
