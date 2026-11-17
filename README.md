@@ -36,7 +36,8 @@ queues: n new · r rename · d delete · </> reorder · q quit
   `<` `>`, quit) does what its key does. Click a tab to open it, a line to select it, the selected line again to go
   to it; the wheel scrolls the list. In the move box, click a queue (outside the box cancels).
 - **Your own queues**: `n` new, `r` rename, `d` delete (its agents go back to unsorted), `<` / `>` reorder.
-  Membership follows the agent's session, so it survives a herdr restart.
+  Membership follows the agent's session and terminal, and last its machine and folder, so it survives a herdr
+  restart, a `/clear`, and a restart into a new pane (an agent found by one key is given its new ones).
 
 ## Install
 

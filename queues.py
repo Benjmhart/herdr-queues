@@ -263,6 +263,28 @@ def keys(agent):
     return k or [f"{h}/p:" + agent["pane_id"]]
 
 
+def folder(agent):
+    """Queue membership only, tried last: host + folder outlives a restart into a new pane followed by /clear, which
+    changes both keys (micro, 2026-11-16: lost to unsorted). Not identity: two agents can share a folder (quiet, inactive
+    and J/K order stay on keys())."""
+    return [f"{agent.get('host') or HOST}/d:" + agent["cwd"]] if agent.get("cwd") else []
+
+
+def learn(state, agents):
+    """A filed agent's keys that aren't stored yet (a new session after /clear or a resume, a new pane, the folder key
+    for agents filed before it existed), so the next change still finds one. Only absent keys: two agents in one folder
+    in different queues would otherwise take the folder key back and forth, a save each time. True if any were added.
+    ponytail: the folder goes to whichever was filed there first; filing one by hand (put) takes it."""
+    m, new = state["members"], False
+    for a in agents:
+        qn = queue_of(state, a)
+        if qn != UNSORTED:
+            for k in keys(a) + folder(a):
+                if k not in m:
+                    m[k], new = qn, True
+    return new
+
+
 def legacy(agent):
     """0.3-0.4.1 keys, relative to the server the popup ran on (another machine's carried its label). Read, never
     written."""
@@ -277,7 +299,7 @@ def legacy(agent):
 
 
 def queue_of(state, agent):
-    for k in keys(agent) + legacy(agent):
+    for k in keys(agent) + legacy(agent) + folder(agent):
         q = state["members"].get(k)
         if q in state["queues"]:
             return q
@@ -290,7 +312,7 @@ def put(state, agent, queue):
         state["queues"].append(queue)
     for k in legacy(agent):
         state["members"].pop(k, None)
-    for k in keys(agent):
+    for k in keys(agent) + folder(agent):
         if queue and queue != UNSORTED:
             state["members"][k] = queue
         else:
@@ -886,6 +908,8 @@ def refresh_once(fresh_info=True):
         state = load()
         listed = json.loads(herdr(None, "agent", "list"))["result"]["agents"]
         listed = real(listed)
+        if learn(state, listed):
+            save(state)
         ws = json.loads(herdr(None, "workspace", "list"))["result"]["workspaces"]
         wsn = {w["workspace_id"]: w.get("label") or w["workspace_id"] for w in ws}
         ids = list(wsn)

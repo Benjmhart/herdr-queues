@@ -7,7 +7,7 @@ q = importlib.util.module_from_spec(spec); spec.loader.exec_module(q)
 A = lambda p, ws, st: {"pane_id": p, "workspace": ws, "workspace_id": ws, "agent_status": st, "host": "micro",
                        "tokens": {"machine_icon": "🐭"}, "agent": "claude", "terminal_id": "t" + p}
 ags = [A("p1", "a", "working"), A("p2", "b", "blocked"), A("p3", "c", "idle")]
-st = {"queues": ["priority", "work"], "members": {}, "icons": {"priority": "🔥"}, "sort": "queues", "headings": "queue"}
+st = {"queues": ["priority", "work"], "members": {}, "icons": {"priority": "🔥"}, "sort": "queues", "headings": "queue", "colors": {"priority": None, "work": None}}  # no colour (0.30 defaults: below)
 for a, qn in zip(ags, ["priority", "priority", "work"]):
     q.put(st, a, qn)
 tok = lambda st: {r[1]["pane_id"]: r[1]["tokens"] for r in q.hiding(st, ags) if r[0] == "pane.report_metadata"}
@@ -109,4 +109,20 @@ with tempfile.TemporaryDirectory() as t:
     assert q.goto_keys() == ["ctrl+a", "a"]
     open(f"{t}/herdr/config.toml", "w").write('[keys\n')
     assert q.goto_keys() is None
+print("ok")
+
+# 0.31.0: membership survives a restart into a new pane followed by /clear (micro, 2026-11-16: lost to unsorted)
+S = lambda sid, t, cwd: {"pane_id": "w1:p1", "host": "micro", "agent_session": {"value": sid} if sid else None,
+                         "terminal_id": t, "cwd": cwd}
+sm = {"queues": ["priority", "work"], "members": {"micro/t:term_old": "priority"}}  # filed before 0.31: terminal only
+old, new = S(None, "term_old", "/p/station"), S("s2", "term_new", "/p/station")
+assert q.queue_of(sm, new) == q.UNSORTED  # the 0.30 failure
+assert q.learn(sm, [old]) and not q.learn(sm, [old])  # backfills the folder key once, then nothing to save
+assert q.queue_of(sm, new) == "priority" and q.learn(sm, [new]) and sm["members"]["s:s2"] == "priority"
+# two agents in one folder, different queues: each keeps its own, and learn settles (no save every pass)
+other = S("s3", "term_3", "/p/station"); q.put(sm, other, "work")
+assert q.queue_of(sm, new) == "priority" and q.queue_of(sm, other) == "work" and not q.learn(sm, [new, other])
+assert q.folder(other) not in [q.keys(new)] and "micro/d:/p/station" not in q.keys(other)  # quiet/inactive/rank: not shared
+assert q.queue_colour({"queues": ["priority", "work"]}, "priority") == "red"  # 0.30 default colours
+assert q.queue_colour({"queues": ["priority"], "colors": {"priority": None}}, "priority") is None
 print("ok")
