@@ -12,9 +12,9 @@ for a, qn in zip(ags, ["priority", "priority", "work"]):
     q.put(st, a, qn)
 tok = lambda st: {r[1]["pane_id"]: r[1]["tokens"] for r in q.hiding(st, ags) if r[0] == "pane.report_metadata"}
 t = tok(st)
-assert t["p1"]["queues_heading"] == "▾ 🔥 priority" and t["p2"]["queues_heading"] is None and t["p3"]["queues_heading"] == "▾ work"
+assert t["p1"]["queues_heading"] == "▾ 🔥 priority 2" and t["p2"]["queues_heading"] is None and t["p3"]["queues_heading"] == "▾ work 1"
 st["collapsed"] = ["priority"]; t = tok(st)  # the blocked one carries the collapsed queue
-assert t["p1"]["queues_inactive"] == "1" and t["p2"]["queues_inactive"] is None and t["p2"]["queues_heading"] == "▸ 🔥 priority +1"
+assert t["p1"]["queues_inactive"] == "1" and t["p2"]["queues_inactive"] is None and t["p2"]["queues_heading"] == "▸ 🔥 priority 2"
 assert q.hiding(st, ags)[-1][0] == "agent.view.set"
 st["sort"] = "workspaces"; t = tok(st)  # off: plain names, no headings
 assert t["p2"]["queues_heading"] is None and t["p2"]["queues_label"] == "b"
@@ -26,10 +26,10 @@ st.update(mark="own", headings="queue", sort="queues", spinner=True); r = q.rows
 assert "$queues_heading_after" not in r and "#f8f8f2" in r and "state_icon" not in r and q.WJ not in r  # escaped, not invisible
 t = tok(st)  # own marks: every heading flush left on its group's first agent; names uncoloured under headings
 P, W = q.PAD, q.WJ
-assert t["p1"]["queues_heading"] == "▾ 🔥 priority" + W  # red = palette slot 1
+assert t["p1"]["queues_heading"] == "▾ 🔥 priority 2" + W  # red = palette slot 1
 assert t["p1"]["queues_label"] == q.SPIN[0] + "  🔥🐭 a" + q.marker("yellow")  # herdr indents it two; working: the spinner's first frame
 assert t["p2"]["queues_label"] == P * 2 + "🔴 🔥🐭 b" + q.marker("red") and t["p2"]["queues_heading"] is None
-assert t["p3"]["queues_label"] == P * 2 + " work🐭 c" and t["p3"]["queues_heading"] == "▾ work"
+assert t["p3"]["queues_label"] == P * 2 + " work🐭 c" and t["p3"]["queues_heading"] == "▾ work 1"
 assert all(t[p]["queues_heading_after"] is None for p in t)
 assert not q.setting(st, "host", ["micro", "icon", "🦊"]); t = tok(st); assert "🦊" in t["p1"]["queues_label"]
 d = tempfile.mkdtemp(); subprocess.run(["git", "-C", d, "init", "-q"])
@@ -38,8 +38,13 @@ st["badges"] = {"gitstatus": {"dirty": "±"}}; assert q.info({"cwd": d}, st)["gi
 a = A("p1", "a", "idle"); a["tokens"]["usage"] = "62"; assert q.label(a, None, "{workspace} {usage_pct}") == "a 62%"
 # heading entries: text, and fake agents filtered
 st2 = {"queues": ["priority"], "icons": {"priority": "🔥"}}
-assert q.heading_text(st2, "priority", 2, False) == "▾ 🔥 priority"
-assert q.heading_text(st2, "priority", 2, True) == "▸ 🔥 priority +2"
+assert q.heading_text(st2, "priority", {"active": 3, "hidden": 2}, False) == "▾ 🔥 priority 3"  # default: active
+assert q.heading_text(st2, "priority", None, True) == "▸ 🔥 priority 0"
+st2["heading"] = "{arrow} {name} {waiting}/{active} +{hidden}"
+assert q.heading_text(st2, "priority", {"active": 3, "waiting": 1, "hidden": 3}, True) == "▸ priority 1/3 +3"
+st2["heading"] = "{arrow} {name} {nope"  # broken: the default, not nothing
+assert q.heading_text(st2, "priority", {"active": 1}, False) == "▾ 🔥 priority 1"
+assert q.setting(st2, "heading", ["{arrow"]) and q.setting(st2, "heading", ["default"]) is None and "heading" not in st2
 h = A("p9", "h", "idle"); h["tokens"]["queues_heading_for"] = "priority"
 assert q.real([h, A("p1", "a", "idle")]) == [A("p1", "a", "idle")]
 # only the token reports that change something are sent
@@ -132,8 +137,10 @@ sc = {"queues": ["priority"], "members": {"micro/t:a": "priority"}, "collapsed":
 la = [{"pane_id": "p1", "host": "micro", "terminal_id": "a"}, {"pane_id": "p2", "host": "micro", "terminal_id": "b"},
       {"pane_id": "p3", "host": "micro", "terminal_id": "c"}]
 sc["inactive"] = q.keys(la[2])
-assert q.hidden_counts(sc, la) == {"priority": 1, "unsorted": 1}  # inactive ones aren't counted (they're hidden anyway)
-assert q.heading_text(sc, "unsorted", 2, True) == "▸ unsorted +2"
+la[0].update(agent_status="blocked")
+assert q.head_counts(sc, la) == {"priority": {"active": 1, "waiting": 1, "hidden": 1},
+                                 "unsorted": {"active": 1, "waiting": 0, "hidden": 1}}  # inactive ones aren't counted
+assert q.heading_text(sc, "unsorted", {"active": 2, "hidden": 2}, True) == "▸ unsorted 2"
 import json as _j, tempfile as _t
 q.HOSTS = os.path.join(_t.mkdtemp(), "hosts.json")
 q.herdr = lambda m, *a, **k: "id\tdesk\tben@100.64.0.5\tdefault\tenabled\nid\tcarbon\tcarbon\tdefault\tenabled\n"
@@ -147,4 +154,14 @@ assert q.skew(sv, ms) == "" or "carbon ?" in q.skew(sv, ms)
 assert "carbon ?" in q.skew(sv, ms) and "beast-arch" not in q.skew(sv, ms)
 sv["versions"]["carbon"] = "0.31.0"; assert "carbon 0.31.0" in q.skew(sv, ms)
 sv["versions"]["carbon"] = q.VERSION; assert q.skew(sv, ms) == ""
+print("ok")
+
+# 0.33.0: the other machines' agents for this machine's headings, from the watcher's cache
+import time as _tm
+q.OTHERS = os.path.join(_t.mkdtemp(), "others.json")
+assert q.others() == []  # no cache yet
+_j.dump({"at": _tm.time(), "agents": [{"host": "carbon", "pane_id": "p9"}, {"host": q.HOST, "pane_id": "p1"}]}, open(q.OTHERS, "w"))
+assert [a["host"] for a in q.others()] == ["carbon"]  # this machine's own come from herdr, not the cache
+_j.dump({"at": _tm.time() - 600, "agents": [{"host": "carbon", "pane_id": "p9"}]}, open(q.OTHERS, "w"))
+assert q.others() == []  # stale: the watcher stopped
 print("ok")

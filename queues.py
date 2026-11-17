@@ -715,6 +715,16 @@ def setting(state, cmd, args):
             return f"host HOST icon EMOJI|none  or  host HOST color {'|'.join(SIDEBAR_COLOURS)}|none"
         h = state.setdefault("hosts", {}).setdefault(args[0], {})
         h.pop(args[1], None) if args[2] == "none" else h.update({args[1]: args[2]})
+    elif cmd == "heading":  # heading FORMAT|default
+        fmt = " ".join(args)
+        if fmt in ("", "default"):
+            state.pop("heading", None)
+        else:
+            try:
+                fmt.format_map(Blank())
+            except (ValueError, IndexError, AttributeError) as e:
+                return f"bad heading format ({e}); fields: {' '.join('{%s}' % k for k in HEAD_FIELDS)}"
+            state["heading"] = fmt
     elif cmd == "colorby" and args[0] in ("queue", "machine"):
         state["colorby"] = args[0]
     elif cmd == "headings" and args[0] in ("queue", "machine", "off"):
@@ -815,23 +825,51 @@ def real(agents):
     return [a for a in agents if not (a.get("tokens") or {}).get("queues_heading_for")]
 
 
-def heading_text(state, q, n_hidden, collapsed):
+HEADING = "{arrow} {icon} {name} {active}"
+HEAD_FIELDS = ("arrow", "icon", "name", "active", "waiting", "hidden")
+
+
+def heading_text(state, q, counts, collapsed):
+    """A queue's heading from the `heading` format (Ben 2026-11-16: "headings should show the number of active agents by
+    default (there should be a token template for heading contents)"). counts: {active, waiting, hidden}; active = in
+    the queue and not marked inactive, waiting = of those, blocked, asking or finished unseen, hidden = of those, kept
+    off the sidebar by the collapse."""
     qi = icon(state, q) if q != UNSORTED else ""
-    name = f"{qi} {q}" if qi and qi != q else q
-    return (f"▸ {name} +{n_hidden}" if collapsed and n_hidden else f"▸ {name}" if collapsed else f"▾ {name}")
+    f = Blank(arrow="▸" if collapsed else "▾", icon=qi if qi and qi != q else "", name=q,
+              **{k: str((counts or {}).get(k, 0)) for k in ("active", "waiting", "hidden")})
+    try:
+        out = (state.get("heading") or HEADING).format_map(f)
+    except (ValueError, IndexError, AttributeError):  # a broken format shows the default, not nothing
+        out = HEADING.format_map(f)
+    return " ".join(out.split())
 
 
-def hidden_counts(state, listed):
-    """{collapsed queue: agents of this machine it hides}. A heading entry belongs to one server, which sees only its
-    own agents, so each machine writes its share into the state and every heading adds them up ("▸ unsorted +1"; the
-    micro agent vanished into collapsed unsorted without one, 2026-11-16). ponytail: a machine that goes away keeps its
-    last share until it runs again."""
+def head_counts(state, agents):
+    """{queue: {active, waiting, hidden}} over the agents given (heading_text says what each counts)."""
     collapsed, out = set(state.get("collapsed", [])), {}
-    for a in listed:
-        q = queue_of(state, a)
-        if q in collapsed and not inactive(state, a):
-            out[q] = out.get(q, 0) + 1
+    for a in agents:
+        if inactive(state, a):
+            continue
+        c = out.setdefault(queue_of(state, a), {"active": 0, "waiting": 0, "hidden": 0})
+        c["active"] += 1
+        c["waiting"] += NEED.get(need(a), 7) <= NEED["done"]
+        c["hidden"] += queue_of(state, a) in collapsed
     return out
+
+
+OTHERS = os.path.join(STATE_DIR, "others.json")  # the other machines' agents, as this machine's watcher last saw them
+
+
+def others():
+    """The other machines' agents for this machine's headings: a heading entry belongs to one server, which sees only
+    its own agents, so the watcher (which lists every machine once a minute) leaves the rest here. Nothing goes into the
+    shared queues: 0.32 kept counts there, and a count saved from an older copy could undo a move made in a popup."""
+    try:
+        with open(OTHERS) as fh:
+            d = json.load(fh)
+        return [a for a in d["agents"] if a.get("host") != HOST] if time.time() - d["at"] < 180 else []
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
 
 
 def entries_sync(state, listed):
@@ -860,11 +898,7 @@ def entries_sync(state, listed):
         if not want:
             return
         groups = groups_of(state)
-        mine = hidden_counts(state, listed)
-        if (state.get("collapsed_counts") or {}).get(HOST, {}) != mine:  # this machine's share, for every heading
-            state.setdefault("collapsed_counts", {})[HOST] = mine
-            save(state)
-        total = lambda q: sum((c or {}).get(q, 0) for c in (state.get("collapsed_counts") or {}).values())
+        counts = head_counts(state, listed + others())
         for q in list(have):
             if q not in groups:
                 herdr(None, "workspace", "close", have.pop(q)["workspace_id"])
@@ -875,7 +909,7 @@ def entries_sync(state, listed):
             if h.get("agent") != HEAD_AGENT or h.get("status") != "unknown":  # "·": herdr's quietest state_icon
                 herdr(None, "pane", "report-agent", h["pane_id"], "--source", HEAD_SOURCE, "--agent", HEAD_AGENT, "--state", "unknown")
         for q in groups:
-            text = heading_text(state, q, total(q), q in collapsed)
+            text = heading_text(state, q, counts.get(q), q in collapsed)
             toks = {"queues_heading_for": q, "queues_label": text + colour(q), "queues_rank": rank_of(state, q=q),
                     "queues_heading_host": HOST}
             h = have.get(q)
@@ -1111,16 +1145,13 @@ def hiding(state, agents, host=HOST):
         hidden |= {a["pane_id"] for a in live if queue_of(state, a) in collapsed}
     colour = lambda a: marker(queue_colour(state, queue_of(state, a)) if by == "queue"
                               else host_setting(state, a.get("host"), "color"))
-    above, last = {}, object()
+    above, last, local = {}, object(), head_counts(state, agents)
     for a in (a for a in live if a["pane_id"] not in hidden):
         q = queue_of(state, a)
         key = q if heads == "queue" else a.get("host")
         if heads and key != last:
             if heads == "queue":
-                qi = icon(state, q) if q != UNSORTED else ""
-                name = f"{qi} {q}" if qi and qi != q else q
-                text = (f"▸ {name} +{extra[q]}" if q in carrier and extra[q] else
-                        f"▸ {name}" if q in carrier else f"▾ {name}")
+                text = heading_text(state, q, dict(local.get(q) or {}, hidden=extra.get(q, 0)), q in carrier)
             else:
                 mi = host_setting(state, a.get("host"), "icon") or (a.get("tokens") or {}).get("machine_icon") or ""
                 text = f"{mi} {a.get('host', '')}".strip()
@@ -1719,7 +1750,7 @@ def nag(ms, notify=True):
     notify False (watch --no-notify) only the inactive marks are kept up."""
     seen, unsent = {}, {}
     while True:
-        ags, prompts, state = [], [], load()
+        ags, prompts, state, here, seen_elsewhere = [], [], load(), None, []
         for m in ms:
             try:
                 listed = json.loads(herdr(m, "agent", "list", timeout=4))["result"]["agents"]
@@ -1732,6 +1763,10 @@ def nag(ms, notify=True):
                     a["workspace"] = wsn.get(a.get("workspace_id"), a.get("workspace_id"))
                 ids = list(wsn)
                 listed.sort(key=lambda a: ids.index(a["workspace_id"]) if a.get("workspace_id") in ids else len(ids))
+                if m == "":
+                    here = listed
+                else:
+                    seen_elsewhere += listed
                 try:
                     if state.get("sort") == "auto":  # waiting agents float up within their queue (Ben 2026-11-15)
                         hw = {a["workspace_id"] for a in heads_here}
@@ -1741,8 +1776,6 @@ def nag(ms, notify=True):
                             apply_order(m, ms[m][1], order + [w for w in ids if w in hw])
                             listed.sort(key=lambda a: order.index(a["workspace_id"]) if a.get("workspace_id") in order else len(order))
                     call(ms[m][1], changed(hiding(state, listed, ms[m][0]), listed))
-                    if m == "":  # heading entries: each machine keeps its own (no two watchers race to create them)
-                        entries_sync(state, listed)
                 except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
                     pass
                 for a in listed:
@@ -1758,6 +1791,15 @@ def nag(ms, notify=True):
                         prompts.append(((m, a["pane_id"]), typed(scr), name))
             except (RuntimeError, OSError, ValueError, KeyError, subprocess.TimeoutExpired):
                 pass
+        try:  # heading entries: each machine keeps its own (no two watchers race to create them), counting every machine
+            os.makedirs(STATE_DIR, exist_ok=True)
+            with open(OTHERS + ".tmp", "w") as fh:
+                json.dump({"at": time.time(), "agents": seen_elsewhere + relayed(ms)}, fh)
+            os.replace(OTHERS + ".tmp", OTHERS)
+            if here is not None:
+                entries_sync(state, here)
+        except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError):
+            pass
         now = time.time()
         due = nag_due(seen, ags, now) + unsent_due(unsent, prompts, now)
         if due:
@@ -1845,7 +1887,8 @@ def key(scr):
     return c
 
 
-def prompt(scr, label, initial=""):
+def prompt(scr, label, initial="", limit=30, esc=""):
+    """A line typed at the bottom; Esc returns esc."""
     h, w = scr.getmaxyx()
     curses.curs_set(1)
     s = initial
@@ -1858,15 +1901,16 @@ def prompt(scr, label, initial=""):
         if c == "enter":
             break
         if c == "esc":
-            s = ""
-            break
+            curses.curs_set(0)
+            scr.timeout(250)
+            return esc
         if c == "backspace":
             s = s[:-1]
         elif isinstance(c, str) and len(c) == 1 and c.isprintable():
             s += c
     curses.curs_set(0)
     scr.timeout(250)
-    return s.strip()[:30]
+    return s.strip()[:limit]
 
 
 def choose(scr, title, options):
@@ -1920,7 +1964,7 @@ def settings(scr, state, ms):
     while True:
         hosts = sorted({h for h, _ in ms.values()})
         rows = [("queue", q) for q in state["queues"]] + [("host", h) for h in hosts] + \
-               [("opt", k) for k in ("headings", "colorby", "mark", "spinner", "entries")]
+               [("opt", k) for k in ("headings", "heading", "colorby", "mark", "spinner", "entries")]
 
         def show(r):
             k, v = r
@@ -1930,6 +1974,8 @@ def settings(scr, state, ms):
                         + (" · collapsed" if v in state.get("collapsed", []) else ""))
             if k == "host":
                 return f"machine  {host_setting(state, v, 'icon') or '·'} {v} · {host_setting(state, v, 'color') or 'no colour'}"
+            if v == "heading":
+                return f"heading text: {state.get('heading') or HEADING}"
             return f"{v}: " + {"headings": state.get("headings") or "off", "colorby": state.get("colorby") or "queue",
                                "mark": state.get("mark") or "herdr", "spinner": "on" if state.get("spinner") else "off",
                                "entries": ("on" if state.get("entries") else "off") + " (experimental: clickable headings)"}[v]
@@ -1937,7 +1983,15 @@ def settings(scr, state, ms):
         if i is None:
             return "settings saved; the sidebar follows" if changed else ""
         k, v = rows[i]
-        if k == "opt":
+        if k == "opt" and v == "heading":
+            fmt = prompt(scr, f"heading ({' '.join('{%s}' % f for f in HEAD_FIELDS)}; empty = default): ",
+                         state.get("heading") or HEADING, limit=120, esc=None)
+            if fmt is None:
+                continue
+            err = setting(state, "heading", [fmt])
+            if err:
+                continue
+        elif k == "opt":
             opts = {"headings": ["queue", "machine", "off"], "colorby": ["queue", "machine"], "mark": ["own", "herdr"],
                     "spinner": ["on", "off"], "entries": ["on", "off"]}[v]
             j = choose(scr, v, opts)
@@ -2301,6 +2355,14 @@ def main(cmd):
                 state["label"] = fmt
             save(state)
         print(state.get("label") or LABEL)
+    elif cmd == "heading":  # queues.py heading [FORMAT|default]: a queue heading's text; no argument shows it
+        state = load()
+        if len(sys.argv) > 2:
+            err = setting(state, "heading", [" ".join(sys.argv[2:])])
+            if err:
+                sys.exit("herdr-queues: " + err)
+            save(state)
+        print(state.get("heading") or HEADING)
     elif cmd == "watch":
         watch(notify="--no-notify" not in sys.argv[2:])
     elif cmd == "open":

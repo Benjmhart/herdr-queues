@@ -72,8 +72,8 @@ connects to the others with `herdr machine`).
    target may be an alias or an IP. Until it has asked (or if it can't), the name is guessed from the target
    (`user@beast-arch.lan` → `beast-arch`), and a wrong guess files that machine's agents under a second name.
 4. **The watcher on each desk** (`queues.py watch`, with your desktop session; `--no-notify` where you don't want
-   notifications). It carries out jumps, keeps the queues the same everywhere, keeps the sidebar marks up, and counts
-   what a collapsed queue hides.
+   notifications). It carries out jumps, keeps the queues the same everywhere, keeps the sidebar marks up, and lists
+   every machine's agents for the heading counts.
 5. **The keybinding on each machine's herdr** (the popup runs where the window is).
 
 Which machine needs ssh to which:
@@ -83,7 +83,8 @@ Which machine needs ssh to which:
 | Popup lists another machine's agents | popup's server → machine (herdr's own connection) | that machine's watcher sends its list instead (outbound from it) |
 | Enter: jump to an agent | desk watcher → every machine (ssh, follows requests) | Enter on that machine's agents does nothing visible |
 | Same queues everywhere | desk watcher → every machine (ssh) | each machine keeps its own copy |
-| Sidebar marks, headings, inactive, `+N` | each machine for itself; desk watcher → machines once a minute | that machine's sidebar updates only on its own events |
+| Sidebar marks, headings, inactive | each machine for itself; desk watcher → machines once a minute | that machine's sidebar updates only on its own events |
+| Heading counts from other machines | that machine's watcher → each machine (ssh), or the machine sends its own | its headings count only its own agents |
 | `s`: reorder workspaces | popup's server → machine (ssh) | that machine keeps its order |
 | Hostnames | desk watcher → machine (ssh, once) | guessed from the ssh target |
 
@@ -216,9 +217,10 @@ carries a `queues_rank` token (its queue, your `J`/`K` order, in auto order its 
 and every server's agent view sorts by it, so each queue has one heading with its agents from all machines under it.
 The view of the server you are looking at applies to the whole list, so every server keeps a set of headings and its
 view shows only its own (token `queues_heading_host`); a click lands on the server you are looking at. Every queue
-gets a heading, empty or not (`unsorted` last). A collapsed heading counts what it hides on every machine
-(`▸ unsorted +2`): each machine writes its own share into the shared queues and the headings add them up, so a
-machine that is off keeps its last share until it runs again. What it costs:
+gets a heading, empty or not (`unsorted` last). Its counts (see the heading template below) cover every machine:
+the server's own agents as they are, the others as the watcher on that machine last listed them (once a minute;
+machines it can't reach from what they send it). With no watcher running there, a heading counts only its own
+server's agents. What it costs:
 
 - herdr reports a click and a keyboard switch alike, so **landing on a heading by any route toggles it**: cycling
   workspaces with the keyboard, or picking it in `prefix+a`. Focus is handed back, with a brief flash.
@@ -287,6 +289,18 @@ It is a template. Fields: `{queue}` (icon, or name when it has none; empty while
 **every token on the agent's pane by name**: `{folder}`, `{fold}`, any plugin's. A field the pane doesn't have is empty;
 an empty field drops out with its spaces. A new agent, a status change or a renamed workspace shows at once (herdr runs `queues.py refresh`); `s`, a new template or a
 queue change shows within the watcher's minute. The watcher follows a plugin update by itself.
+
+The queue headings have a template of their own (also in `,` settings, "heading text"):
+
+    python3 queues.py heading                                          # show it: {arrow} {icon} {name} {active}
+    python3 queues.py heading '{arrow} {icon} {name} {waiting}/{active}'  # ▾ 🔥 priority 1/4
+    python3 queues.py heading default
+
+Fields: `{arrow}` (▾ open, ▸ collapsed), `{icon}` (the queue's emoji, empty when it has none), `{name}`, and three
+counts: `{active}` (agents in the queue not marked inactive), `{waiting}` (of those, blocked, asking, or finished and
+not yet looked at), `{hidden}` (of those, kept off the sidebar by the collapse; with headings on the agents' rows, the
+ones behind the agent that carries the collapsed queue). The default shows `{active}`, open or collapsed, so an agent
+that lands in a collapsed queue still shows up as a number.
 
 The watcher keeps the tokens up on every machine it reaches (once a minute); a move in the popup updates them at once.
 herdr's agent list has no section headers, so the icon is the queue's mark.
