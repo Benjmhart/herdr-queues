@@ -362,8 +362,8 @@ its own notification. A dimmed suggested prompt isn't counted.
 - The summary scrapes the visible screen and is tuned on Claude Code; other agents show their last line.
 - Windows is tested in a Windows 11 VM (2026-11-17): the popup, the watcher, a jump on that machine, the whole switch
   to another machine (Goto keys, search, Return; the other machine a WSL Arch) and the notification balloon. Prefix and
-  key go as separate SendKeys, or herdr misses the prefix. From inside WSL: the desktop, lock and window checks and the
-  balloon through `powershell.exe`; a jump started from WSL is not yet seen end to end.
+  key go as separate SendKeys, or herdr misses the prefix. From inside WSL (herdr in WSL, in Windows Terminal): the desktop, lock and
+  window checks, the balloon, and the whole switch to another machine (a second WSL distro), through `powershell.exe`.
 
 ## Upgrading from herdr-streams
 
