@@ -157,7 +157,8 @@ pythonw <the plugin's folder>\queues.py watch
 ```
 
 (`herdr plugin list` prints the folder.) It reaches your other machines over ssh as on Linux; those machines run Linux
-or macOS. Under WSL, herdr inside WSL uses the same Windows driver through `powershell.exe` (written, not yet tested).
+or macOS (a WSL distro on the same PC works as one: add it with `herdr machine add`). Under WSL, herdr inside WSL
+uses the same Windows driver through `powershell.exe`.
 
 ## One set of queues on every machine
 
@@ -352,9 +353,10 @@ its own notification. A dimmed suggested prompt isn't counted.
 - The Goto guard reads the pane, not herdr's own dialogs: if another herdr dialog is open (the first-run setup on a fresh
   config), the keys go there and Return is still pressed.
 - The summary scrapes the visible screen and is tuned on Claude Code; other agents show their last line.
-- Windows is tested in a Windows 11 VM: the popup, a jump on that machine, the watcher, and the
-  Goto keys reaching herdr in Windows Terminal (prefix and key as separate SendKeys, or herdr misses the prefix). The
-  whole machine switch, Return included, is not yet seen end to end there, nor the notification balloon. WSL is untested.
+- Windows is tested in a Windows 11 VM (2026-11-17): the popup, the watcher, a jump on that machine, the whole switch
+  to another machine (Goto keys, search, Return; the other machine a WSL Arch) and the notification balloon. Prefix and
+  key go as separate SendKeys, or herdr misses the prefix. From inside WSL: the desktop, lock and window checks and the
+  balloon through `powershell.exe`; a jump started from WSL is not yet seen end to end.
 
 ## Upgrading from herdr-streams
 
