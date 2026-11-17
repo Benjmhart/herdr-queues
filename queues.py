@@ -11,6 +11,7 @@ each with one line of what it needs. Enter jumps to the agent, switching the her
   queues.py refresh      this machine's sidebar tokens now (herdr runs it on rename and new agents)
   queues.py color Q C    queue Q's colour (red orange yellow green cyan purple pink grey, none); colorby queue|machine
   queues.py host H icon E | host H color C   a machine's emoji (overrides herdr-machine-icons) and colour
+  queues.py host H spin N|off|default         machine H's spinner frames a second (default 4; 1 on a lean host)
   queues.py headings queue|machine|off;  collapse Q;  mark own|herdr;  spinner on|off;  badge model|gitstatus V [E]
   queues.py status NAME GLYPH|default;  status NAME color COLOUR|none;  status spin 'F1 F2 ...'|default   (NAME: blocked asks asks_seen done done_seen background idle working unknown)
   queues.py rows         herdr's [ui.sidebar.agents] for the mark style (colours are settings: it never changes)
@@ -747,11 +748,14 @@ def setting(state, cmd, args):
             return f"color QUEUE {'|'.join(SIDEBAR_COLOURS)}|none"
         c = state.setdefault("colors", {})
         c[args[0]] = None if args[1] == "none" else args[1]  # None: no colour (absent: the default)
-    elif cmd == "host":  # host HOST icon EMOJI|none, host HOST color NAME|none
-        if len(args) < 3 or args[1] not in ("icon", "color") or (args[1] == "color" and args[2] not in (*SIDEBAR_COLOURS, "none")):
-            return f"host HOST icon EMOJI|none  or  host HOST color {'|'.join(SIDEBAR_COLOURS)}|none"
+    elif cmd == "host":  # host HOST icon EMOJI|none, host HOST color NAME|none, host HOST spin N|off|default
+        if len(args) < 3 or args[1] not in ("icon", "color", "spin") or (args[1] == "color" and args[2] not in (*SIDEBAR_COLOURS, "none")) \
+                or (args[1] == "spin" and not (args[2] in ("off", "default") or re.fullmatch(r"\d+(\.\d+)?", args[2])
+                                                and 0 < float(args[2]) <= 10)):
+            return (f"host HOST icon EMOJI|none  or  host HOST color {'|'.join(SIDEBAR_COLOURS)}|none  or  "
+                    "host HOST spin FRAMES-PER-SECOND|off|default")
         h = state.setdefault("hosts", {}).setdefault(args[0], {})
-        h.pop(args[1], None) if args[2] == "none" else h.update({args[1]: args[2]})
+        h.pop(args[1], None) if args[2] in ("none", "default") else h.update({args[1]: args[2]})
     elif cmd == "heading":  # heading FORMAT|default
         fmt = " ".join(args)
         if fmt in ("", "default"):
@@ -820,14 +824,31 @@ def sock(method, params):
     return rpc(method, params, "spin")
 
 
+def lean_host():
+    """A machine set up to run lean: `~/bin/lean-host` exits 0 there (the author's fleet convention; absent elsewhere)."""
+    try:
+        return subprocess.run([os.path.expanduser("~/bin/lean-host")], timeout=5).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def spin_rate(state, lean):
+    """This machine's spinner frames a second: `host HOST spin N|off`, else 4, or 1 on a lean host. Each frame is a
+    metadata update per working agent, which the herdr server redraws: 4/s cost ~6 % of a core on micro (i3-3227U,
+    measured 2026-11-16, station-maintenance fleet 39). 0 = off: the mark stays as it is."""
+    v = host_setting(state, HOST, "spin")
+    return 0.0 if v == "off" else float(v) if v else 1.0 if lean else 4.0
+
+
 def spin_loop():
     """Started by herdr with the server (the manifest's startup): turns the working mark of this machine's agents,
-    4 frames a second, while `spinner on` and `mark own`. Only the label's mark changes; one process per server."""
+    at spin_rate frames a second, while `spinner on` and `mark own`. Only the label's mark changes; one process per
+    server."""
     os.makedirs(STATE_DIR, exist_ok=True)
     lock = open(os.path.join(STATE_DIR, "spin.lock"), "w")
     if not file_lock(lock, wait=False):
         sys.exit(0)
-    state, seen, i, checked = {}, None, 0, time.time()
+    state, seen, i, checked, lean = {}, None, 0, time.time(), lean_host()
     while True:
         if time.time() - checked > 60:
             checked = time.time()
@@ -838,10 +859,11 @@ def spin_loop():
                 state, seen = load(), m
         except OSError:
             pass
-        if not (state.get("spinner") and state.get("mark") == "own"):
+        rate = spin_rate(state, lean)
+        if not (state.get("spinner") and state.get("mark") == "own" and rate > 0):
             time.sleep(2)
             continue
-        time.sleep(0.25)
+        time.sleep(1 / rate)
         i += 1
         try:
             for a in sock("agent.list", {})["result"]["agents"]:
@@ -2183,7 +2205,9 @@ def settings(scr, state, ms):
                 return (f"queue    {qi if qi != v else '·'} {v} · {queue_colour(state, v) or 'no colour'}"
                         + (" · collapsed" if v in state.get("collapsed", []) else ""))
             if k == "host":
-                return f"machine  {host_setting(state, v, 'icon') or '·'} {v} · {host_setting(state, v, 'color') or 'no colour'}"
+                sp = host_setting(state, v, "spin")
+                return (f"machine  {host_setting(state, v, 'icon') or '·'} {v} · {host_setting(state, v, 'color') or 'no colour'}"
+                        + f" · spinner {'still' if sp == 'off' else sp + '/s' if sp else 'default'}")
             if v == "heading":
                 return f"heading text: {state.get('heading') or HEADING}"
             return f"{v}: " + {"headings": state.get("headings") or "off", "colorby": state.get("colorby") or "queue",
@@ -2209,10 +2233,17 @@ def settings(scr, state, ms):
                 continue
             setting(state, v, [opts[j]])
         else:
-            what = choose(scr, v, ["emoji", "colour"] + (["collapse / open"] if k == "queue" else []))
+            what = choose(scr, v, ["emoji", "colour"] + (["collapse / open"] if k == "queue" else ["spinner speed"]))
             if what is None:
                 continue
-            if what == 2:
+            if what == 2 and k == "host":
+                sp = ["4", "2", "1", "off", "default"]
+                j = choose(scr, f"{v}: spinner frames a second (off: still; default: 4, or 1 on a lean host)",
+                           ["4/s", "2/s", "1/s", "off (still)", "default"])
+                if j is None:
+                    continue
+                setting(state, "host", [v, "spin", sp[j]])
+            elif what == 2:
                 setting(state, "collapse", [v])
             elif what == 0:
                 j = choose(scr, f"{v}: emoji", EMOJI + ["type one…", "none"])
