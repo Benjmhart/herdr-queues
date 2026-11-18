@@ -659,8 +659,10 @@ def model_of(sid):
 def git_of(cwd):
     """clean, dirty, ahead, behind, diverged, conflict; None outside a repository."""
     try:
-        r = subprocess.run(["git", "-C", cwd, "status", "--porcelain=v2", "--branch"], capture_output=True, text=True,
-                           timeout=3)
+        # --no-optional-locks: status otherwise takes index.lock to refresh the index, and a status killed by the timeout
+        # (a loaded machine) left the lock behind, failing the agent's next commit (beast-arch, 2026-11-18, three times).
+        r = subprocess.run(["git", "--no-optional-locks", "-C", cwd, "status", "--porcelain=v2", "--branch"],
+                           capture_output=True, text=True, timeout=3)
     except (OSError, subprocess.TimeoutExpired, TypeError):
         return None
     if r.returncode:
