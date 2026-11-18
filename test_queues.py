@@ -40,7 +40,7 @@ a = A("p1", "a", "idle"); a["tokens"]["usage"] = "62"; assert q.label(a, None, "
 st = {}; a = A("p1", "a", "idle"); b = A("p2", "a", "idle")
 q.set_lane(st, a, "urgent"); q.set_lane(st, b, "chores")
 assert q.lane(st, a) == "urgent" and q.lane(st, b) == "chores"
-assert q.label(a, None, "{workspace}", lane="urgent") == "a [urgent]" and q.label(a, None, "{workspace}") == "a"
+assert q.label(a, None, "{workspace}", lane="urgent") == "[urgent] a" and q.label(a, None, "{workspace}") == "a"
 assert q.label(a, None, "{lane} {workspace}", lane="urgent") == "[urgent] a" and q.label(a, None, "{lane} {workspace}") == "a"
 assert q.label(a, None, "{agent}", lane="x").endswith(" [x]")
 q.set_lane(st, a, ""); assert q.lane(st, a) == "" and q.lane(st, b) == "chores"

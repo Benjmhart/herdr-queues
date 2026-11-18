@@ -17,7 +17,7 @@ each with one line of what it needs. Enter jumps to the agent, switching the her
   queues.py rows         herdr's [ui.sidebar.agents] for the mark style (colours are settings: it never changes)
   queues.py spin         the spinner (herdr starts it with the server)
   queues.py entries on|off   experimental: each queue heading an entry of its own; clicking it collapses the queue
-  queues.py lane PANE NAME|none   tag one agent (PANE "here": this pane), shown after its workspace
+  queues.py lane PANE NAME|none   tag one agent (PANE "here": this pane), shown before its workspace
   queues.py label [F]    the sidebar's $queues_label template, e.g. "{queue}{machine} {workspace} {folder}" (any pane
                          token by name); "default" resets
 
@@ -583,7 +583,7 @@ def set_quiet(state, agent, on):
 
 
 # Lanes (Ben 2026-11-18): a short tag of your own on one agent, to tell apart agents sharing a workspace ("urgent",
-# "chores" on two mlabs-marketing sessions). Shown after the workspace name in the sidebar label and the popup.
+# "chores" on two mlabs-marketing sessions). Shown between the machine icon and the workspace name (Ben).
 def lane(state, agent):
     return next((state["lanes"][k] for k in keys(agent) if k in state.get("lanes", {})), "")
 
@@ -622,7 +622,7 @@ class Blank(dict):
 
 def label(a, qi, fmt=LABEL, machine=None, lane=""):
     if lane and "{lane}" not in fmt:  # a format of your own written before lanes still shows them
-        fmt = fmt.replace("{workspace}", "{workspace} {lane}") if "{workspace}" in fmt else fmt + " {lane}"
+        fmt = fmt.replace("{workspace}", "{lane} {workspace}") if "{workspace}" in fmt else fmt + " {lane}"
     toks = {k: v for k, v in (a.get("tokens") or {}).items() if not k.startswith("queues_")}  # not its own
     f = Blank(toks, queue=qi or "", machine=machine or toks.get("machine_icon") or "",
               workspace=a.get("workspace") or a.get("workspace_id", ""), lane=f"[{lane}]" if lane else "",
@@ -2413,7 +2413,7 @@ def ui(scr):
                 title = a.get("terminal_title_stripped") or os.path.basename(a.get("cwd", ""))
                 s = sums.get(skey(a)) if st in WAITING else ""
                 if i + top == sel:  # the selected line: one solid bar
-                    line = f" {ICON.get(st, '?')} {(a['machine'] + ' · ') if a['machine'] else ''}{a['workspace']}{' [' + lane(state, a) + ']' if lane(state, a) else ''}  {title}"
+                    line = f" {ICON.get(st, '?')} {(a['machine'] + ' · ') if a['machine'] else ''}{'[' + lane(state, a) + '] ' if lane(state, a) else ''}{a['workspace']}  {title}"
                     line += "  · inactive" if inactive(state, a) else ""
                     line += "  · no alerts" if quiet(state, a) else ""
                     line += f"  — {s if s is not None else '…'}" if st in WAITING else ""
@@ -2423,10 +2423,9 @@ def ui(scr):
                 if a["machine"]:
                     x = put_str(scr, row, x, a["machine"], C.get("machine", 0)) 
                     x = put_str(scr, row, x, " · ", C.get("help", 0))
-                x = put_str(scr, row, x, a["workspace"], C.get("workspace", 0) | curses.A_BOLD)
                 if lane(state, a):
-                    x = put_str(scr, row, x, f" [{lane(state, a)}]", C.get("machine", 0))
-                x += 2
+                    x = put_str(scr, row, x, f"[{lane(state, a)}] ", C.get("machine", 0))
+                x = put_str(scr, row, x, a["workspace"], C.get("workspace", 0) | curses.A_BOLD) + 2
                 x = put_str(scr, row, x, title, curses.A_BOLD if st in WAITING else 0)
                 if inactive(state, a):
                     x = put_str(scr, row, x, "  · inactive", C.get("help", 0))

@@ -315,7 +315,8 @@ queue change shows within the watcher's minute. The watcher follows a plugin upd
 ### Lanes: several agents in one workspace
 
 Two agents working the same repo look the same in the sidebar. A **lane** is a short tag of your own on one agent,
-shown in brackets after its workspace name, `🐺 mlabs-marketing [urgent]` and `🐺 mlabs-marketing [chores]`: `t` in
+shown in brackets between the machine icon and the workspace name, `🐺 [urgent] mlabs-marketing` and
+`🐺 [chores] mlabs-marketing`: `t` in
 the popup types it (empty clears it), or from a shell on the agent's machine:
 
     python3 queues.py lane w5:p3 urgent     # a pane id, from `herdr pane list`
@@ -323,7 +324,7 @@ the popup types it (empty clears it), or from a shell on the agent's machine:
     python3 queues.py lane w5:p3 none       # clear it
 
 A lane follows the agent as its queue does (by its session and terminal, synced to every machine). Put `{lane}` in your
-label template to place it yourself; a template without it gets it after `{workspace}`.
+label template to place it yourself; a template without it gets it just before `{workspace}`.
 
 The queue headings have a template of their own (also in `,` settings, "heading text"):
 
