@@ -36,6 +36,11 @@ d = tempfile.mkdtemp(); subprocess.run(["git", "-C", d, "init", "-q"])
 assert q.git_of(d) == "clean"; open(d + "/f", "w").write("x"); assert q.git_of(d) == "dirty"; assert q.git_of("/") is None
 st["badges"] = {"gitstatus": {"dirty": "±"}}; assert q.info({"cwd": d}, st)["gitstatus"] == "±"
 a = A("p1", "a", "idle"); a["tokens"]["usage"] = "62"; assert q.label(a, None, "{workspace} {usage_pct}") == "a 62%"
+# a newer machine's labels are left to it; unknown or older versions are not
+v = q.VERSION.split("."); up = ".".join(v[:-1] + [str(int(v[-1]) + 1)])
+assert q.newer({"versions": {"x": up}}, "x") and not q.newer({"versions": {"x": q.VERSION}}, "x")
+assert not q.newer({"versions": {"x": "0.1.0"}}, "x") and not q.newer({}, "x") and not q.newer({"versions": {"x": "?"}}, "x")
+assert q.newer({"versions": {"x": "1.0.0"}}, "x")
 # lanes: by the agent's keys; shown after the workspace, in old formats too; empty clears
 st = {}; a = A("p1", "a", "idle"); b = A("p2", "a", "idle")
 q.set_lane(st, a, "urgent"); q.set_lane(st, b, "chores")

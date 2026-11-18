@@ -4,20 +4,12 @@ A [herdr](https://herdr.dev) plugin: your own **queues** (personal, work, anythi
 you, **on every machine herdr knows**, each with one line saying what it needs. Press Enter and the herdr window
 switches to that agent's machine and focuses it.
 
-```
- personal 1   work 3   unsorted 2
-←→/h l/tab queue · ↑↓/j k · enter: go to agent · m: move to queue · 1-9: move to that queue · a: all/waiting
-queues: n new · r rename · d delete · </> reorder · q quit
+![herdr-queues: the popup over herdr, the sidebar grouped by queue](docs/screenshot.png)
 
-! desktop · billing-api  Add invoice export
-    Bash command: Run the migration and push -- Do you want to proceed?
-
-! laptop · docs-site  Rewrite the getting-started guide
-    Which framework should the examples use?
-
-✓ mobile-app  Fix the login crash
-    The fix is merged and CI is green. Nothing left to do on this one.
-```
+The sidebar (bottom left) grouped by queue: 🔥 priority, 🔧 work, 🏠 personal, each agent with its status (🔴 asking
+you something, ✓ done, a spinner while it works), its machine's icon and its workspace; two agents on one repo told
+apart by their lanes, `[urgent]` and `[chores]`. Over it, the popup (your key, below): a tab per queue, the waiting
+agents first, each with what it needs. (Made-up agents in a throwaway herdr.)
 
 - **A queue lists all its agents**, the waiting ones first: blocked (`!`, it asked you something), then done (`✓`, it
   finished). **Your own order:** `J` / `K` (or the ▲ ▼ buttons) move the selected agent down or up, and from then on
@@ -65,7 +57,9 @@ connects to the others with `herdr machine`).
 
 1. **The plugin on every machine, the same version.** The shared queues change meaning between releases (0.28's sort
    order, 0.31's folder keys). The popup opens with a line naming any machine on another version (`?` = older than
-   0.32, which doesn't report one). An outbound-only machine can only be updated from itself.
+   0.32, which doesn't report one). Until they match, an older machine's watcher leaves a newer machine's sidebar
+   labels alone (from 0.36.1; before it, an older watcher repainted them every minute without the newer fields, so
+   0.36's lanes came and went). An outbound-only machine can only be updated from itself.
 2. **`herdr machine add` for each other machine, on each desk.** The popup lists the server it runs on plus those.
 3. **ssh from each desk to each machine, with no prompt** (`BatchMode`: a key or agent, the same target herdr uses).
    The watcher asks each machine its hostname once (`uname -n`, cached in `hosts.json` in the plugin's state), so a

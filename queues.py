@@ -1920,6 +1920,16 @@ def publish_version():
         save(state)
 
 
+def newer(state, host):
+    """The host runs a newer release than this copy: its labels are its own (an older watcher repainting them every
+    minute dropped 0.36's lanes from beast-arch's sidebar while carbon and micro were on 0.33/0.34, 2026-11-18)."""
+    v = (state.get("versions") or {}).get(host)
+    try:
+        return tuple(map(int, v.split("."))) > tuple(map(int, VERSION.split(".")))
+    except (AttributeError, ValueError):
+        return False
+
+
 def skew(state, ms):
     """"" when every machine runs this version, else what differs ("carbon ?" = a release older than 0.32)."""
     vs = dict.fromkeys((h for h, _ in ms.values()), "?") | (state.get("versions") or {})
@@ -2026,7 +2036,8 @@ def nag(ms, notify=True):
                         if order != rids:
                             apply_order(m, ms[m][1], order + [w for w in ids if w in hw])
                             listed.sort(key=lambda a: order.index(a["workspace_id"]) if a.get("workspace_id") in order else len(order))
-                    call(ms[m][1], changed(hiding(state, listed, ms[m][0]), listed))
+                    if not newer(state, ms[m][0]):
+                        call(ms[m][1], changed(hiding(state, listed, ms[m][0]), listed))
                 except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
                     pass
                 for a in listed:
@@ -2080,7 +2091,7 @@ LATER = "saved; the sidebar follows within a minute (the watcher on your desk ap
 def retoken(state, agents, agent, ms):
     """The sidebar tokens of the agent's machine, now. False when only its watcher can (relayed, or unreachable)."""
     m = agent["machine"]
-    if m not in ms:  # relayed (micro): only its own watcher reaches its server
+    if m not in ms or newer(state, ms[m][0]):  # relayed (micro): only its own watcher reaches its server
         return False
     try:
         call(ms[m][1], hiding(state, [a for a in agents if a["machine"] == m], ms[m][0]))
