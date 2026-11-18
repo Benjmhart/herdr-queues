@@ -17,6 +17,7 @@ each with one line of what it needs. Enter jumps to the agent, switching the her
   queues.py rows         herdr's [ui.sidebar.agents] for the mark style (colours are settings: it never changes)
   queues.py spin         the spinner (herdr starts it with the server)
   queues.py entries on|off   experimental: each queue heading an entry of its own; clicking it collapses the queue
+  queues.py lane PANE NAME|none   tag one agent (PANE "here": this pane), shown after its workspace
   queues.py label [F]    the sidebar's $queues_label template, e.g. "{queue}{machine} {workspace} {folder}" (any pane
                          token by name); "default" resets
 
@@ -581,6 +582,17 @@ def set_quiet(state, agent, on):
     state["quiet"] = sorted(k | set(keys(agent)) if on else k)
 
 
+# Lanes (Ben 2026-11-18): a short tag of your own on one agent, to tell apart agents sharing a workspace ("urgent",
+# "chores" on two mlabs-marketing sessions). Shown after the workspace name in the sidebar label and the popup.
+def lane(state, agent):
+    return next((state["lanes"][k] for k in keys(agent) if k in state.get("lanes", {})), "")
+
+
+def set_lane(state, agent, name):
+    ls = {k: v for k, v in state.get("lanes", {}).items() if k not in keys(agent)}
+    state["lanes"] = dict(ls, **{k: name for k in keys(agent)}) if name else ls
+
+
 # Sidebar token (Ben 2026-11-15: "alert status - queue name - workspace name - machine name"). Every agent's pane
 # carries its queue (queues_queue), as the queue's icon when it has one, for herdr's [ui.sidebar.agents] rows as
 # "$queues_queue". herdr cuts a narrow row at its end, so a one-character icon leaves the width to the workspace name
@@ -600,7 +612,7 @@ def icon(state, name):
 # A field the pane doesn't have is empty; empty fields drop out with their spaces.
 LABEL = "{queue}{machine} {workspace}"
 PLAIN = "{workspace}"
-FIELDS = ("queue", "machine", "workspace", "host", "agent", "title", "model", "gitstatus", "usage", "usage_pct")
+FIELDS = ("queue", "machine", "workspace", "lane", "host", "agent", "title", "model", "gitstatus", "usage", "usage_pct")
 
 
 class Blank(dict):
@@ -608,10 +620,13 @@ class Blank(dict):
         return ""
 
 
-def label(a, qi, fmt=LABEL, machine=None):
+def label(a, qi, fmt=LABEL, machine=None, lane=""):
+    if lane and "{lane}" not in fmt:  # a format of your own written before lanes still shows them
+        fmt = fmt.replace("{workspace}", "{workspace} {lane}") if "{workspace}" in fmt else fmt + " {lane}"
     toks = {k: v for k, v in (a.get("tokens") or {}).items() if not k.startswith("queues_")}  # not its own
     f = Blank(toks, queue=qi or "", machine=machine or toks.get("machine_icon") or "",
-              workspace=a.get("workspace") or a.get("workspace_id", ""), host=a.get("host", ""),
+              workspace=a.get("workspace") or a.get("workspace_id", ""), lane=f"[{lane}]" if lane else "",
+              host=a.get("host", ""),
               agent=a.get("agent", ""), title=a.get("terminal_title_stripped", ""),
               usage_pct=f"{toks['usage']}%" if toks.get("usage") else "")
     try:
@@ -1235,7 +1250,7 @@ def hiding(state, agents, host=HOST):
         # Under a heading the heading carries the colour and names keep herdr's text colour: a whole name in red or
         # green was hard to read on Ben's translucent terminal (2026-11-16). Blocked stays red (the 🔴 rule).
         mc = mark_colour(state, need(a)) if own else None  # the mark's colour takes the row, over the queue's
-        body = label(a, qi, fmt, host_setting(state, a.get("host"), "icon")) + (
+        body = label(a, qi, fmt, host_setting(state, a.get("host"), "icon"), lane(state, a)) + (
             marker(mc) if mc else "" if heads or entries else colour(a))
         if own:
             mark = mark_of(a, spin, state)
@@ -2046,7 +2061,7 @@ def nag(ms, notify=True):
 # --- the list ---------------------------------------------------------------------------------------------------
 
 HELP = ("←→/h l/tab queue · ↑↓/j k pgup pgdn g G · enter: go to agent · m: move to queue · 1-9: move to that queue · a: waiting only/all\n"
-        "J/K: move down/up in the queue · i: inactive (off herdr's sidebar, sinks to the bottom) · b: alerts on/off\nqueues: n new · r rename · d delete · </> reorder · s: sidebar: your order / queues / queues, waiting first · c: collapse queue · ,: settings · q quit")
+        "J/K: move down/up in the queue · i: inactive (off herdr's sidebar, sinks to the bottom) · b: alerts on/off · t: lane (a tag of your own)\nqueues: n new · r rename · d delete · </> reorder · s: sidebar: your order / queues / queues, waiting first · c: collapse queue · ,: settings · q quit")
 # The mouse (Ben 2026-11-14: "clickable buttons and scrolling of the agent list for mouse users"): each button sends its
 # key. Click a tab to open it, a line to select it, the selected line again to go to it; the wheel scrolls.
 BUTTONS = [("go", "enter"), ("▲", "K"), ("▼", "J"), ("move", "m"), ("waiting/all", "a"), ("inactive", "i"), ("alerts", "b"), ("sort", "s"), ("collapse", "c"), ("settings", ","),
@@ -2398,7 +2413,7 @@ def ui(scr):
                 title = a.get("terminal_title_stripped") or os.path.basename(a.get("cwd", ""))
                 s = sums.get(skey(a)) if st in WAITING else ""
                 if i + top == sel:  # the selected line: one solid bar
-                    line = f" {ICON.get(st, '?')} {(a['machine'] + ' · ') if a['machine'] else ''}{a['workspace']}  {title}"
+                    line = f" {ICON.get(st, '?')} {(a['machine'] + ' · ') if a['machine'] else ''}{a['workspace']}{' [' + lane(state, a) + ']' if lane(state, a) else ''}  {title}"
                     line += "  · inactive" if inactive(state, a) else ""
                     line += "  · no alerts" if quiet(state, a) else ""
                     line += f"  — {s if s is not None else '…'}" if st in WAITING else ""
@@ -2408,7 +2423,10 @@ def ui(scr):
                 if a["machine"]:
                     x = put_str(scr, row, x, a["machine"], C.get("machine", 0)) 
                     x = put_str(scr, row, x, " · ", C.get("help", 0))
-                x = put_str(scr, row, x, a["workspace"], C.get("workspace", 0) | curses.A_BOLD) + 2
+                x = put_str(scr, row, x, a["workspace"], C.get("workspace", 0) | curses.A_BOLD)
+                if lane(state, a):
+                    x = put_str(scr, row, x, f" [{lane(state, a)}]", C.get("machine", 0))
+                x += 2
                 x = put_str(scr, row, x, title, curses.A_BOLD if st in WAITING else 0)
                 if inactive(state, a):
                     x = put_str(scr, row, x, "  · inactive", C.get("help", 0))
@@ -2489,6 +2507,12 @@ def ui(scr):
         elif c in ("J", "K") and q:
             sel = move(state, agents, qs[cur], q[sel], 1 if c == "J" else -1, everyone)
             save(state)
+        elif c == "t" and q:
+            name = prompt(scr, "lane (empty clears): ", lane(state, q[sel]), 16, esc=None)
+            if name is not None:
+                set_lane(state, q[sel], " ".join(name.split()))
+                save(state)
+                msg = f"lane: {lane(state, q[sel]) or 'none'}" if retoken(state, agents, q[sel], ms) else LATER
         elif c == "b" and q:
             on = not quiet(state, q[sel])
             set_quiet(state, q[sel], on)
@@ -2567,6 +2591,18 @@ def main(cmd):
             state.get("icons", {}).pop(name, None)
         save(state)
         print(json.dumps(state.get("icons", {}), ensure_ascii=False))
+    elif cmd == "lane":  # queues.py lane PANE NAME|none: tag an agent on this machine; PANE "here" is $HERDR_PANE_ID
+        if len(sys.argv) < 4:
+            sys.exit("usage: queues.py lane PANE NAME|none")
+        pid = os.environ.get("HERDR_PANE_ID", "") if sys.argv[2] == "here" else sys.argv[2]
+        a = next((a for a in real(json.loads(herdr(None, "agent", "list"))["result"]["agents"]) if a["pane_id"] == pid), None)
+        if not a:
+            sys.exit(f"herdr-queues: no agent in pane {pid!r} on this machine")
+        state = load()
+        set_lane(state, a, "" if sys.argv[3] == "none" else " ".join(sys.argv[3:]))
+        save(state)
+        refresh()
+        print(lane(state, a) or "no lane")
     elif cmd == "refresh":  # herdr runs it on agent changes, renames and focus: this machine's tokens now
         refresh()
     elif cmd in SETTINGS:

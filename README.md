@@ -307,10 +307,23 @@ Its layout is yours, synced to every machine like the queues:
     python3 queues.py label default                          # back to the default
 
 It is a template. Fields: `{queue}` (icon, or name when it has none; empty while unsorted), `{machine}`
-(`$machine_icon`), `{workspace}`, `{host}`, `{agent}` (claude, codex, ...), `{title}` (the pane's terminal title), and
+(`$machine_icon`), `{workspace}`, `{lane}` (below), `{host}`, `{agent}` (claude, codex, ...), `{title}` (the pane's terminal title), and
 **every token on the agent's pane by name**: `{folder}`, `{fold}`, any plugin's. A field the pane doesn't have is empty;
 an empty field drops out with its spaces. A new agent, a status change or a renamed workspace shows at once (herdr runs `queues.py refresh`); `s`, a new template or a
 queue change shows within the watcher's minute. The watcher follows a plugin update by itself.
+
+### Lanes: several agents in one workspace
+
+Two agents working the same repo look the same in the sidebar. A **lane** is a short tag of your own on one agent,
+shown in brackets after its workspace name, `🐺 mlabs-marketing [urgent]` and `🐺 mlabs-marketing [chores]`: `t` in
+the popup types it (empty clears it), or from a shell on the agent's machine:
+
+    python3 queues.py lane w5:p3 urgent     # a pane id, from `herdr pane list`
+    python3 queues.py lane here chores      # run inside the agent's own pane
+    python3 queues.py lane w5:p3 none       # clear it
+
+A lane follows the agent as its queue does (by its session and terminal, synced to every machine). Put `{lane}` in your
+label template to place it yourself; a template without it gets it after `{workspace}`.
 
 The queue headings have a template of their own (also in `,` settings, "heading text"):
 

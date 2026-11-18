@@ -36,6 +36,14 @@ d = tempfile.mkdtemp(); subprocess.run(["git", "-C", d, "init", "-q"])
 assert q.git_of(d) == "clean"; open(d + "/f", "w").write("x"); assert q.git_of(d) == "dirty"; assert q.git_of("/") is None
 st["badges"] = {"gitstatus": {"dirty": "±"}}; assert q.info({"cwd": d}, st)["gitstatus"] == "±"
 a = A("p1", "a", "idle"); a["tokens"]["usage"] = "62"; assert q.label(a, None, "{workspace} {usage_pct}") == "a 62%"
+# lanes: by the agent's keys; shown after the workspace, in old formats too; empty clears
+st = {}; a = A("p1", "a", "idle"); b = A("p2", "a", "idle")
+q.set_lane(st, a, "urgent"); q.set_lane(st, b, "chores")
+assert q.lane(st, a) == "urgent" and q.lane(st, b) == "chores"
+assert q.label(a, None, "{workspace}", lane="urgent") == "a [urgent]" and q.label(a, None, "{workspace}") == "a"
+assert q.label(a, None, "{lane} {workspace}", lane="urgent") == "[urgent] a" and q.label(a, None, "{lane} {workspace}") == "a"
+assert q.label(a, None, "{agent}", lane="x").endswith(" [x]")
+q.set_lane(st, a, ""); assert q.lane(st, a) == "" and q.lane(st, b) == "chores"
 # heading entries: text, and fake agents filtered
 st2 = {"queues": ["priority"], "icons": {"priority": "🔥"}}
 assert q.heading_text(st2, "priority", {"active": 3, "hidden": 2}, False) == "▾ 🔥 priority 3"  # default: active
