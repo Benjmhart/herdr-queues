@@ -222,21 +222,15 @@ _a = {"agent_status": "done", "tokens": {"queues_draft": "1", "queues_asks": "1"
 assert q.need(_a) == "draft"
 print("ok")
 
-# low context (🪫): below the configured % left; off by default; shown at the label's end
-_a = {"tokens": {"usage": "45"}, "workspace": "api"}
-assert q.context_left(_a) == 55
-assert not q.low_context({}, _a) and q.low_context({"low_context": 60}, _a) and not q.low_context({"low_context": 50}, _a)
-assert q.label(_a, "", "{workspace}", low=True) == "api 🪫"
-_st = {"queues": [], "members": {}}
-assert q.setting(_st, "context", ["60"]) is None and _st["low_context"] == 60
-assert q.setting(_st, "context", ["off"]) is None and _st["low_context"] is None
-print("ok")
-
-# revisit (🔖): set by hand, kept by session key, shown at the label's end, findable by search
-_s = {"queues": [], "members": {}}
-_a = {"agent_session": {"value": "z"}, "pane_id": "w1:p1", "workspace": "api"}
-assert not q.revisit(_s, _a)
-q.set_revisit(_s, _a, True); assert q.revisit(_s, _a) and q.matches(_s, _a, "revisit")
-assert q.label(_a, "", "{workspace}", again=True, low=True) == "api 🔖 🪫"
-q.set_revisit(_s, _a, False); assert not q.revisit(_s, _a)
+# flags (🔖 revisit, 📌 pin, 🪫 low context): set by session key, own glyphs, at the label's end, searchable
+_s = {"queues": [], "members": {}, "low_context": 60}
+_a = {"agent_session": {"value": "z"}, "pane_id": "w1:p1", "workspace": "api", "tokens": {"usage": "45"}}
+assert q.context_left(_a) == 55 and q.low_context(_s, _a) and not q.low_context({"low_context": 50}, _a)
+q.set_flag(_s, _a, "revisit", True); q.set_flag(_s, _a, "pin", True)
+assert [n for n, _, _ in q.flags_of(_s, _a)] == ["revisit", "pin", "lowctx"]
+assert q.matches(_s, _a, "revisit") and q.matches(_s, _a, "pin")
+assert q.setting(_s, "status", ["pin", "⭐"]) is None and q.glyph(_s, "pin") == "⭐"
+assert q.label(_a, "", "{workspace}", flags=" ".join(g for _, g, _ in q.flags_of(_s, _a))) == "api 🔖 ⭐ 🪫"
+q.set_flag(_s, _a, "revisit", False); assert not q.revisit(_s, _a) and q.flagged(_s, _a, "pin")
+assert q.setting(_s, "context", ["off"]) is None and _s["low_context"] is None
 print("ok")

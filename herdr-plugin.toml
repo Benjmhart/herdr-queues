@@ -1,6 +1,6 @@
 id = "benjmhart.queues"
 name = "Queues"
-version = "0.40.0"
+version = "0.41.0"
 min_herdr_version = "0.9.3"
 description = "Your own queues (personal, work, ...) of the agents waiting on you, on every machine; Enter jumps there"
 platforms = ["linux", "macos", "windows"]

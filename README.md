@@ -321,19 +321,19 @@ It is a template. Fields: `{queue}` (icon, or name when it has none; empty while
 an empty field drops out with its spaces. A new agent, a status change or a renamed workspace shows at once (herdr runs `queues.py refresh`); `s`, a new template or a
 queue change shows within the watcher's minute. The watcher follows a plugin update by itself.
 
-### Revisit: 🔖
+### Flags: 🔖 revisit, 📌 pin, 🪫 low context
 
-A mark of your own on a conversation to come back to: `v` in the popup toggles it, or
-`python3 queues.py revisit PANE|here on|off` on the agent's machine. It shows 🔖 at the end of the sidebar label and on
-the popup line, and the search finds it (`/revisit`). It stays until you clear it, through restarts (it follows the
-session, like a lane).
+Flags sit at the end of an agent's sidebar label, whatever your label format (`{flags}` places them yourself), and on
+its popup line; the search finds the ones you set (`/revisit`, `/pin`). Each follows the session, like a lane.
 
-### Low context: 🪫
+- **🔖 revisit**: `v` in the popup, or `python3 queues.py revisit PANE|here on|off`. It clears itself when you next
+  focus that agent.
+- **📌 pin**: `V`, or `queues.py pin PANE|here on|off`. It stays until you clear it.
+- **🪫 low context**: `queues.py context 60` flags an agent with less than 60 % of its context left ("🪫 35% context
+  left" in the popup); `context off` (the default) removes it. The figure is `$usage` (see Info tokens), so it needs
+  the Claude status line that records it; agents without one are never flagged.
 
-`queues.py context 60` flags an agent with less than 60 % of its context left: 🪫 at the end of its sidebar label
-(whatever your format; `{lowctx}` places it yourself) and "🪫 35% context left" on its popup line. `context off`
-removes it (the default). The figure is `$usage` (see Info tokens), so it needs the Claude status line that records
-it; agents without one are never flagged.
+Every glyph is yours, like the status marks: `queues.py status revisit|pin|lowctx GLYPH|default`.
 
 ### Lanes: several agents in one workspace
 
