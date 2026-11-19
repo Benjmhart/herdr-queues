@@ -16,6 +16,7 @@ each with one line of what it needs. Enter jumps to the agent, switching the her
   queues.py headings queue|machine|off;  collapse Q;  mark own|herdr;  spinner on|off;  badge model|gitstatus V [E]
   queues.py status NAME GLYPH|default;  status NAME color COLOUR|none;  status spin 'F1 F2 ...'|default   (NAME: blocked draft asks asks_seen done done_seen background idle working unknown)
   queues.py context N|off    flag (🪫) an agent with less than N % of its context left; off by default
+  queues.py revisit PANE|here on|off   🔖 an agent to come back to (v in the popup)
   queues.py rows         herdr's [ui.sidebar.agents] for the mark style (colours are settings: it never changes)
   queues.py spin         the spinner (herdr starts it with the server)
   queues.py entries on|off   experimental: each queue heading an entry of its own; clicking it collapses the queue
@@ -584,6 +585,19 @@ def set_quiet(state, agent, on):
     state["quiet"] = sorted(k | set(keys(agent)) if on else k)
 
 
+# Revisit (Ben 2026-11-19: "manually set a flag to revisit an agent convo"): 🔖 on the agent until you clear it.
+REVISIT = "🔖"
+
+
+def revisit(state, agent):
+    return any(k in state.get("revisit", []) for k in keys(agent))
+
+
+def set_revisit(state, agent, on):
+    k = set(state.get("revisit", [])) - set(keys(agent))
+    state["revisit"] = sorted(k | set(keys(agent)) if on else k)
+
+
 # Lanes (Ben 2026-11-18): a short tag of your own on one agent, to tell apart agents sharing a workspace ("urgent",
 # "chores" on two mlabs-marketing sessions). Shown between the machine icon and the workspace name (Ben).
 def lane(state, agent):
@@ -615,7 +629,7 @@ def icon(state, name):
 LABEL = "{queue}{machine} {workspace}"
 PLAIN = "{workspace}"
 FIELDS = ("queue", "machine", "workspace", "lane", "host", "agent", "title", "model", "gitstatus", "usage", "usage_pct",
-          "lowctx")
+          "lowctx", "revisit")
 LOWCTX = "🪫"
 
 
@@ -639,8 +653,10 @@ class Blank(dict):
         return ""
 
 
-def label(a, qi, fmt=LABEL, machine=None, lane="", low=False):
-    if low and "{lowctx}" not in fmt:  # the flag shows whatever your format, at its end
+def label(a, qi, fmt=LABEL, machine=None, lane="", low=False, again=False):
+    if again and "{revisit}" not in fmt:  # the flags show whatever your format, at its end
+        fmt += " {revisit}"
+    if low and "{lowctx}" not in fmt:
         fmt += " {lowctx}"
     if lane and "{lane}" not in fmt:  # a format of your own written before lanes still shows them
         fmt = fmt.replace("{workspace}", "{lane} {workspace}") if "{workspace}" in fmt else fmt + " {lane}"
@@ -649,7 +665,8 @@ def label(a, qi, fmt=LABEL, machine=None, lane="", low=False):
               workspace=a.get("workspace") or a.get("workspace_id", ""), lane=f"[{lane}]" if lane else "",
               host=a.get("host", ""),
               agent=a.get("agent", ""), title=a.get("terminal_title_stripped", ""),
-              usage_pct=f"{toks['usage']}%" if toks.get("usage") else "", lowctx=LOWCTX if low else "")
+              usage_pct=f"{toks['usage']}%" if toks.get("usage") else "", lowctx=LOWCTX if low else "",
+              revisit=REVISIT if again else "")
     try:
         out = fmt.format_map(f)
     except (ValueError, IndexError, AttributeError):  # a broken format shows the default, not nothing
@@ -1303,7 +1320,8 @@ def hiding(state, agents, host=HOST):
         # Under a heading the heading carries the colour and names keep herdr's text colour: a whole name in red or
         # green was hard to read on Ben's translucent terminal (2026-11-16). Blocked stays red (the 🔴 rule).
         mc = mark_colour(state, need(a)) if own else None  # the mark's colour takes the row, over the queue's
-        body = label(a, qi, fmt, host_setting(state, a.get("host"), "icon"), lane(state, a), low_context(state, a)) + (
+        body = label(a, qi, fmt, host_setting(state, a.get("host"), "icon"), lane(state, a), low_context(state, a),
+                     revisit(state, a)) + (
             marker(mc) if mc else "" if heads or entries else colour(a))
         if own:
             mark = mark_of(a, spin, state)
@@ -2125,10 +2143,10 @@ def nag(ms, notify=True):
 # --- the list ---------------------------------------------------------------------------------------------------
 
 HELP = ("←→/h l/tab queue · ↑↓/j k pgup pgdn g G · enter: go to agent · m: move to queue · 1-9: move to that queue · a: waiting only/all · /: search every agent\n"
-        "J/K: move down/up in the queue · i: inactive (off herdr's sidebar, sinks to the bottom) · b: alerts on/off · t: lane (a tag of your own)\nqueues: n new · r rename · d delete · </> reorder · s: sidebar: your order / queues / queues, waiting first · c: collapse queue · ,: settings · q quit")
+        "J/K: move down/up in the queue · i: inactive (off herdr's sidebar, sinks to the bottom) · b: alerts on/off · v: revisit mark · t: lane (a tag of your own)\nqueues: n new · r rename · d delete · </> reorder · s: sidebar: your order / queues / queues, waiting first · c: collapse queue · ,: settings · q quit")
 # The mouse (Ben 2026-11-14: "clickable buttons and scrolling of the agent list for mouse users"): each button sends its
 # key. Click a tab to open it, a line to select it, the selected line again to go to it; the wheel scrolls.
-BUTTONS = [("go", "enter"), ("▲", "K"), ("▼", "J"), ("move", "m"), ("waiting/all", "a"), ("inactive", "i"), ("alerts", "b"), ("sort", "s"), ("collapse", "c"), ("settings", ","), ("search", "/"),
+BUTTONS = [("go", "enter"), ("▲", "K"), ("▼", "J"), ("move", "m"), ("waiting/all", "a"), ("inactive", "i"), ("alerts", "b"), ("revisit", "v"), ("sort", "s"), ("collapse", "c"), ("settings", ","), ("search", "/"),
            ("new", "n"), ("rename", "r"), ("delete", "d"), ("<", "<"), (">", ">"), ("quit", "q")]
 WHEEL_UP = getattr(curses, "BUTTON4_PRESSED", 0)
 WHEEL_DOWN = getattr(curses, "BUTTON5_PRESSED", 0x200000)  # ncurses 6; older Pythons lack the name
@@ -2407,7 +2425,7 @@ def put_str(scr, y, x, text, attr=0):
 def matches(state, a, query):
     """Search (/): every space-separated word of the query appears, case-blind, in the agent's machine, lane, queue,
     workspace, title or folder."""
-    hay = " ".join([a.get("machine") or "", lane(state, a) or "", queue_of(state, a), a.get("workspace") or "",
+    hay = " ".join(["revisit" if revisit(state, a) else "", a.get("machine") or "", lane(state, a) or "", queue_of(state, a), a.get("workspace") or "",
                     a.get("terminal_title_stripped") or "", a.get("cwd") or ""]).lower()
     return all(w in hay for w in query.lower().split())
 
@@ -2496,6 +2514,7 @@ def ui(scr):
                     line = f" {ICON.get(st, '?')} {(a['machine'] + ' · ') if a['machine'] else ''}{'[' + lane(state, a) + '] ' if lane(state, a) else ''}{a['workspace']}  {title}"
                     line += "  · inactive" if inactive(state, a) else ""
                     line += "  · no alerts" if quiet(state, a) else ""
+                    line += f"  · {REVISIT} revisit" if revisit(state, a) else ""
                     line += f"  · {LOWCTX} {context_left(a)}% context left" if low_context(state, a) else ""
                     line += f"  — {s if s is not None else '…'}" if st in WAITING else ""
                     put_str(scr, row, 0, line.ljust(w - 1), C.get("select", curses.A_REVERSE) | curses.A_BOLD)
@@ -2512,6 +2531,8 @@ def ui(scr):
                     x = put_str(scr, row, x, "  · inactive", C.get("help", 0))
                 if quiet(state, a):
                     x = put_str(scr, row, x, "  · no alerts", C.get("help", 0))
+                if revisit(state, a):
+                    x = put_str(scr, row, x, f"  · {REVISIT} revisit", C.get("summary", 0))
                 if low_context(state, a):
                     x = put_str(scr, row, x, f"  · {LOWCTX} {context_left(a)}% context left", C.get("summary", 0))
                 if st in WAITING:
@@ -2620,6 +2641,11 @@ def ui(scr):
                 set_lane(state, q[sel], " ".join(name.split()))
                 save(state)
                 msg = f"lane: {lane(state, q[sel]) or 'none'}" if retoken(state, agents, q[sel], ms) else LATER
+        elif c == "v" and q:
+            on = not revisit(state, q[sel])
+            set_revisit(state, q[sel], on)
+            save(state)
+            msg = (f"{REVISIT} marked to revisit" if on else "revisit mark cleared") if retoken(state, agents, q[sel], ms) else LATER
         elif c == "b" and q:
             on = not quiet(state, q[sel])
             set_quiet(state, q[sel], on)
@@ -2710,6 +2736,18 @@ def main(cmd):
         save(state)
         refresh()
         print(lane(state, a) or "no lane")
+    elif cmd == "revisit":  # queues.py revisit PANE on|off: 🔖 on an agent on this machine; PANE "here" = $HERDR_PANE_ID
+        if len(sys.argv) < 4 or sys.argv[3] not in ("on", "off"):
+            sys.exit("usage: queues.py revisit PANE on|off")
+        pid = os.environ.get("HERDR_PANE_ID", "") if sys.argv[2] == "here" else sys.argv[2]
+        a = next((a for a in real(json.loads(herdr(None, "agent", "list"))["result"]["agents"]) if a["pane_id"] == pid), None)
+        if not a:
+            sys.exit(f"herdr-queues: no agent in pane {pid!r} on this machine")
+        state = load()
+        set_revisit(state, a, sys.argv[3] == "on")
+        save(state)
+        refresh()
+        print("revisit" if revisit(state, a) else "no revisit mark")
     elif cmd == "refresh":  # herdr runs it on agent changes, renames and focus: this machine's tokens now
         refresh()
     elif cmd in SETTINGS:

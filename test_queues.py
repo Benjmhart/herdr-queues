@@ -231,3 +231,12 @@ _st = {"queues": [], "members": {}}
 assert q.setting(_st, "context", ["60"]) is None and _st["low_context"] == 60
 assert q.setting(_st, "context", ["off"]) is None and _st["low_context"] is None
 print("ok")
+
+# revisit (🔖): set by hand, kept by session key, shown at the label's end, findable by search
+_s = {"queues": [], "members": {}}
+_a = {"agent_session": {"value": "z"}, "pane_id": "w1:p1", "workspace": "api"}
+assert not q.revisit(_s, _a)
+q.set_revisit(_s, _a, True); assert q.revisit(_s, _a) and q.matches(_s, _a, "revisit")
+assert q.label(_a, "", "{workspace}", again=True, low=True) == "api 🔖 🪫"
+q.set_revisit(_s, _a, False); assert not q.revisit(_s, _a)
+print("ok")
