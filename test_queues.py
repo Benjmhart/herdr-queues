@@ -1,5 +1,9 @@
 """python3 test_queues.py: headings, collapse, sort modes' labels, colours, marks and indent, git state, badges (no herdr needed)."""
-import importlib.util, os, subprocess, sys, tempfile, tomllib
+import importlib.util, os, subprocess, sys, tempfile
+try:
+    from tomllib import loads as toml_check
+except ImportError:  # Python < 3.11 (macOS's own python3 is 3.9): the rows TOML goes unchecked
+    toml_check = str
 
 sys.argv = ["x"]
 spec = importlib.util.spec_from_file_location("q", os.path.join(os.path.dirname(__file__), "queues.py"))
@@ -21,8 +25,8 @@ assert t["p2"]["queues_heading"] is None and t["p2"]["queues_label"] == "b"
 st.update(sort="auto", headings="machine", collapsed=[]); t = tok(st)
 assert t["p1"]["queues_heading"] == "🐭 micro" and t["p2"]["queues_heading"] is None
 assert q.setting(st, "color", ["priority", "#ff5555"]) and not q.setting(st, "color", ["priority", "red"])
-r = q.rows_toml(st); tomllib.loads(r); assert "$queues_heading_after" not in r and "state_icon" in r
-st.update(mark="own", headings="queue", sort="queues", spinner=True); r = q.rows_toml(st); tomllib.loads(r)
+r = q.rows_toml(st); toml_check(r); assert "$queues_heading_after" not in r and "state_icon" in r
+st.update(mark="own", headings="queue", sort="queues", spinner=True); r = q.rows_toml(st); toml_check(r)
 assert "$queues_heading_after" not in r and "#f8f8f2" in r and "state_icon" not in r and q.WJ not in r  # escaped, not invisible
 t = tok(st)  # own marks: every heading flush left on its group's first agent; names uncoloured under headings
 P, W = q.PAD, q.WJ
@@ -119,14 +123,17 @@ assert sent == [("ydotool", "key", "29:1", "48:1", "48:0", "29:0"), ("ydotool", 
 q.tool = real_tool
 print("ok")
 import os, tempfile
-with tempfile.TemporaryDirectory() as t:
-    os.environ["APPDATA" if q.WIN else "XDG_CONFIG_HOME"] = t  # where goto_keys reads herdr's config
-    assert q.goto_keys() == ["ctrl+b", "g"]  # no config: herdr's defaults
-    os.makedirs(f"{t}/herdr")
-    open(f"{t}/herdr/config.toml", "w").write('[keys]\nprefix = "ctrl+a"\ngoto = ["prefix+a", "prefix+g"]\n')
-    assert q.goto_keys() == ["ctrl+a", "a"]
-    open(f"{t}/herdr/config.toml", "w").write('[keys\n')
+if sys.version_info < (3, 11):  # no tomllib (macOS's own python3 is 3.9): no Goto keys, so no blind keys
     assert q.goto_keys() is None
+else:
+    with tempfile.TemporaryDirectory() as t:
+        os.environ["APPDATA" if q.WIN else "XDG_CONFIG_HOME"] = t  # where goto_keys reads herdr's config
+        assert q.goto_keys() == ["ctrl+b", "g"]  # no config: herdr's defaults
+        os.makedirs(f"{t}/herdr")
+        open(f"{t}/herdr/config.toml", "w").write('[keys]\nprefix = "ctrl+a"\ngoto = ["prefix+a", "prefix+g"]\n')
+        assert q.goto_keys() == ["ctrl+a", "a"]
+        open(f"{t}/herdr/config.toml", "w").write('[keys\n')
+        assert q.goto_keys() is None
 print("ok")
 
 # 0.31.0: membership survives a restart into a new pane followed by /clear (micro, 2026-11-16: lost to unsorted)

@@ -58,11 +58,10 @@ HERDR = os.environ.get("HERDR_BIN_PATH", "herdr")
 STANDALONE = "HERDR_PLUGIN_ID" not in os.environ
 HOST = socket.gethostname()
 REMOTE_STATE = "~/.local/state/herdr/plugins/" + PLUGIN + "/queues.json"
-try:
-    import tomllib
-    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "herdr-plugin.toml"), "rb") as _f:
-        VERSION = tomllib.load(_f).get("version", "?")
-except (ImportError, OSError, ValueError):
+try:  # a regex, not tomllib: macOS's own python3 is 3.9, and tomllib is 3.11+
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "herdr-plugin.toml"), encoding="utf-8") as _f:
+        VERSION = re.search(r'^version = "([^"]+)"', _f.read(), re.M).group(1)
+except (OSError, AttributeError):
     VERSION = "?"
 HOSTS = os.path.join(STATE_DIR, "hosts.json")  # {ssh target: that machine's hostname}, learned by the watcher
 RELAY = os.path.join(STATE_DIR, "relay")  # <host>.json: agents of a machine this one can't reach (micro), sent by it
@@ -1273,7 +1272,8 @@ def host_setting(state, host, what):
 
 def rows_toml(state):
     """herdr's [ui.sidebar.agents] for the current mark style. Static: colours are settings, not config."""
-    slots = [f'{{ contains = "{"\\u2060" * (i + 1)}", fg = "{c}" }}'  # escaped: no invisible text in config
+    wj = "\\u2060"  # escaped: no invisible text in config (and no backslash inside an f-string: Python < 3.12)
+    slots = [f'{{ contains = "{wj * (i + 1)}", fg = "{c}" }}'
              for i, c in reversed(list(enumerate(SIDEBAR_COLOURS.values())))]
     head = '{ token = "$queues_heading", bold = true, rules = [' + ", ".join(slots) + "] }"
     if state.get("mark") == "own":

@@ -175,6 +175,16 @@ pythonw <the plugin's folder>\queues.py watch
 or macOS (a WSL distro on the same PC works as one: add it with `herdr machine add`). Under WSL, herdr inside WSL
 uses the same Windows driver through `powershell.exe`.
 
+### macOS
+
+Tested on Arch Linux and macOS 14 (Sonoma; an Intel VM, herdr 0.9.5 from herdr.dev's `install.sh`, the Command Line
+Tools' `python3` 3.9.6) on 2026-11-19: the tests; the plugin linked into a real herdr (sidebar labels, the spinner, the
+blocked mark, the refresh and focus hooks); the popup and search, in an attached client and on their own; and the
+pieces other machines run there over ssh (the request tail, the shared queues, the relay, socket calls), run locally,
+not yet from another machine. **Not on macOS:** the watcher's window switching and its notifications: it drives
+X11, Wayland and Windows windows, and macOS has none of its tools, so a Mac is a machine you reach, not the desk the
+watcher runs on. macOS's own `python3` is 3.9: it works; Goto keys are read only on 3.11+, which a Mac never needs.
+
 ## One set of queues on every machine
 
 Each save also goes down the same request channel, and the watcher keeps the master copy on your desk and writes it
