@@ -233,3 +233,21 @@ assert q.label(_a, "", "{workspace}", flags=" ".join(g for _, g, _ in q.flags_of
 q.set_flag(_s, _a, "revisit", False); assert not q.revisit(_s, _a) and q.flagged(_s, _a, "pin")
 assert q.setting(_s, "context", ["off"]) is None and _s["low_context"] is None
 print("ok")
+
+# mark_seen: a stopped agent is marked seen on its own server, local or by ssh; a working one is left alone
+_calls = []
+_call, _ret = q.call, q.retoken
+q.call = lambda target, reqs: _calls.append((target, reqs))
+q.retoken = lambda *a: True
+try:
+    _a = {"agent_status": "idle", "state_change_seq": 22, "pane_id": "w2:p4", "machine": "media-center", "tokens": {}}
+    assert q.mark_seen({}, [_a], _a, {"media-center": ("media-center", "media-center")})
+    assert _calls[-1][0] == "media-center" and _calls[-1][1][0][1]["tokens"] == {"queues_seen": "22"} and _a["tokens"]["queues_seen"] == "22"
+    _l = {"agent_status": "done", "state_change_seq": 5, "pane_id": "w1:p1", "machine": "", "tokens": {}}
+    assert q.mark_seen({}, [_l], _l, {}) and _calls[-1][0] is None
+    _n = len(_calls)
+    assert q.mark_seen({}, [], {"agent_status": "working", "pane_id": "w1:p2", "machine": ""}, {}) and len(_calls) == _n
+    assert not q.mark_seen({}, [], dict(_a, machine="nowhere"), {})   # unreachable: says so
+finally:
+    q.call, q.retoken = _call, _ret
+print("ok")

@@ -2155,10 +2155,10 @@ def nag(ms, notify=True):
 # --- the list ---------------------------------------------------------------------------------------------------
 
 HELP = ("←→/h l/tab queue · ↑↓/j k pgup pgdn g G · enter: go to agent · m: move to queue · 1-9: move to that queue · a: waiting only/all · /: search every agent\n"
-        "J/K: move down/up in the queue · i: inactive (off herdr's sidebar, sinks to the bottom) · b: alerts on/off · v/V: revisit/pin · t: lane (a tag of your own)\nqueues: n new · r rename · d delete · </> reorder · s: sidebar: your order / queues / queues, waiting first · c: collapse queue · ,: settings · q quit")
+        "J/K: move down/up in the queue · i: inactive (off herdr's sidebar, sinks to the bottom) · b: alerts on/off · v/V: revisit/pin · x: mark seen · t: lane (a tag of your own)\nqueues: n new · r rename · d delete · </> reorder · s: sidebar: your order / queues / queues, waiting first · c: collapse queue · ,: settings · q quit")
 # The mouse (Ben 2026-11-14: "clickable buttons and scrolling of the agent list for mouse users"): each button sends its
 # key. Click a tab to open it, a line to select it, the selected line again to go to it; the wheel scrolls.
-BUTTONS = [("go", "enter"), ("▲", "K"), ("▼", "J"), ("move", "m"), ("waiting/all", "a"), ("inactive", "i"), ("alerts", "b"), ("revisit", "v"), ("pin", "V"), ("sort", "s"), ("collapse", "c"), ("settings", ","), ("search", "/"),
+BUTTONS = [("go", "enter"), ("▲", "K"), ("▼", "J"), ("move", "m"), ("waiting/all", "a"), ("inactive", "i"), ("alerts", "b"), ("revisit", "v"), ("pin", "V"), ("seen", "x"), ("sort", "s"), ("collapse", "c"), ("settings", ","), ("search", "/"),
            ("new", "n"), ("rename", "r"), ("delete", "d"), ("<", "<"), (">", ">"), ("quit", "q")]
 WHEEL_UP = getattr(curses, "BUTTON4_PRESSED", 0)
 WHEEL_DOWN = getattr(curses, "BUTTON5_PRESSED", 0x200000)  # ncurses 6; older Pythons lack the name
@@ -2169,6 +2169,29 @@ NAMED = {curses.KEY_NPAGE: "pgdn", curses.KEY_PPAGE: "pgup", curses.KEY_HOME: "h
 
 
 LATER = "saved; the sidebar follows within a minute (the watcher on your desk applies it)"
+
+
+def mark_seen(state, agents, agent, ms):
+    """Mark a stopped agent seen on its own server (queues_seen = its state_change_seq), as focusing its pane does.
+    Ben 2026-11-19: media-system's pi agent kept its ✔ after he opened it: its pane was already the focused one on
+    media-center, so herdr fired no pane.focused and nothing else tells a plugin what a client is showing. Going to
+    an agent from the popup, or x, marks it seen whatever the focus was. False when its server can't be reached."""
+    if agent.get("agent_status") not in ("done", "idle"):
+        return True
+    seq = str(agent.get("state_change_seq"))
+    req = ["pane.report_metadata", {"pane_id": agent["pane_id"], "source": SOURCE, "tokens": {"queues_seen": seq}}]
+    agent.setdefault("tokens", {})["queues_seen"] = seq
+    m = agent["machine"]
+    try:
+        if not m:
+            call(None, [req])
+        elif m in ms and not newer(state, ms[m][0]):
+            call(ms[m][1], [req])
+        else:
+            return False   # relayed (micro): only its own watcher reaches its server
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return retoken(state, agents, agent, ms) if m else True
 
 
 def retoken(state, agents, agent, ms):
@@ -2568,6 +2591,7 @@ def ui(scr):
                 query, sel = query[:-1], 0
                 continue
             if c == "enter" and q:
+                mark_seen(state, agents, q[sel], ms)
                 msg = go(q[sel], ms)
                 if not msg:
                     return
@@ -2672,9 +2696,12 @@ def ui(scr):
             for a in {a["machine"]: a for a in agents}.values():  # the labels follow at once, not in the watcher's minute
                 retoken(state, agents, a, ms)
         elif c == "enter" and q:
+            mark_seen(state, agents, q[sel], ms)
             msg = go(q[sel], ms)
             if not msg:
                 return
+        elif c == "x" and q:
+            msg = "marked seen" if mark_seen(state, agents, q[sel], ms) else LATER
         elif c == "m" and q:
             here = queue_of(state, q[sel])
             opts = [s for s in state["queues"] if s != here] + ([UNSORTED] if here != UNSORTED else []) + ["new queue…"]

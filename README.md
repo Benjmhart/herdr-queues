@@ -382,6 +382,12 @@ watcher starts are left out. Every desk's watcher notifies on its own screen.
 "· no alerts" and is kept by the agent's session, like inactive. To turn them off on a desk altogether, start the
 watcher with `watch --no-notify` (it still keeps the inactive marks up).
 
+**Seen.** A finished agent's ✔ turns to ✓ once you have seen it: when its pane gets focus (herdr's `pane.focused`
+on the agent's own machine), when you go to it from the popup or search (Enter), or with `x` in the popup. herdr
+fires no focus event for a pane that is already the focused one on its machine, and tells a plugin nothing about what
+a window shows, so opening such an agent from the sidebar leaves its ✔; Enter or `x` clears it. Claude agents also
+follow herdr's own seen state.
+
 It also reads each idle agent's prompt: a reply typed but never sent (still there, unchanged, after 5 minutes) gets
 its own notification. A dimmed suggested prompt isn't counted.
 
