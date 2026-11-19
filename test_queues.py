@@ -188,12 +188,11 @@ _w, q.windows = q.windows, lambda d=None: [("1", "WIN11VM: System32", True), ("2
 assert q.herdr_windows({"win11vm", "beast-arch"}) == [("1", "win11vm"), ("2", "beast-arch")]
 q.windows = _w
 st = {}                                                                   # per-host spinner speed
-assert q.setting(st, "host", [q.HOST, "spin", "1"]) is None and q.spin_rate(st, False) == 1.0
-assert q.setting(st, "host", [q.HOST, "spin", "off"]) is None and q.spin_rate(st, False) == 0.0
+assert q.setting(st, "host", [q.HOST, "spin", "1"]) is None and q.spin_rate(st) == 1.0
+assert q.setting(st, "host", [q.HOST, "spin", "off"]) is None and q.spin_rate(st) == 0.0
 assert q.setting(st, "host", [q.HOST, "spin", "fast"]) and q.setting(st, "host", [q.HOST, "spin", "0"])  # refused
-assert q.setting(st, "host", [q.HOST, "spin", "default"]) is None and q.spin_rate(st, False) == 4.0
-assert q.spin_rate(st, True) == 1.0                                      # a lean host's default
-assert q.setting(st, "host", ["other", "spin", "0.5"]) is None and q.spin_rate(st, False) == 4.0  # not this host's
+assert q.setting(st, "host", [q.HOST, "spin", "default"]) is None and q.spin_rate(st) == 1.0
+assert q.setting(st, "host", ["other", "spin", "0.5"]) is None and q.spin_rate(st) == 1.0  # not this host's
 print("ok")
 
 # search (/): every word, case-blind, in machine / lane / queue / workspace / title / folder

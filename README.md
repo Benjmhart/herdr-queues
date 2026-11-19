@@ -84,12 +84,12 @@ connects to the others with `herdr machine`).
    notifications). It carries out jumps, keeps the queues the same everywhere, keeps the sidebar marks up, and lists
    every machine's agents for the heading counts.
 5. **The keybinding on each machine's herdr** (the popup runs where the window is).
-6. **The spinner's speed per machine**, if one is slow. Each frame is a sidebar update per working agent that the
-   herdr server redraws: at 4 frames a second that cost ~6 % of a core on an i3-3227U (the watcher ~1 %). Set it
-   per machine, from any machine (the setting travels with the queues): `queues.py host micro spin 1` (frames a
-   second, up to 10), `spin off` (the mark stays still), `spin default`; or in the popup's settings, the machine's row.
-   The default is 4, and 1 on a machine where `~/bin/lean-host` exits 0 (the author's convention for lean machines;
-   without that file, 4).
+6. **The spinner's speed per machine.** Each frame is a sidebar update per working agent that the herdr server
+   redraws, so the spinner is most of what this plugin costs herdr. At 4 frames a second it took ~6 % of a core on an
+   i3-3227U, and 10-17 % of one on a 16-core desktop with about six agents working (3-6 % with the spinner paused),
+   so the default is 1 frame a second (since 0.42.0; it was 4). Set it per machine, from any machine (the setting
+   travels with the queues): `queues.py host micro spin 2` (frames a second, up to 10), `spin off` (the mark stays
+   still: no cost), `spin default`; or in the popup's settings, the machine's row.
 
 Which machine needs ssh to which:
 
@@ -227,7 +227,7 @@ same from a shell:
     python3 queues.py icon priority 🔥          # a queue's emoji
     python3 queues.py color priority red        # red orange yellow green cyan purple pink grey (Dracula), none
     python3 queues.py host desktop icon 🐺   # a machine's emoji (overrides herdr-machine-icons), or: color purple
-    python3 queues.py host micro spin 1      # a machine's spinner frames a second (off: still; default: 4, lean 1)
+    python3 queues.py host micro spin 1      # a machine's spinner frames a second (off: still; default: 1)
     python3 queues.py colorby machine           # colour rows by queue (default) or by machine
     python3 queues.py mark own                  # status marks drawn by the plugin: indented groups, spinner
     python3 queues.py spinner on                # working agents spin (needs mark own)

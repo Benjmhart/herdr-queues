@@ -12,7 +12,7 @@ each with one line of what it needs. Enter jumps to the agent, switching the her
   queues.py refresh      this machine's sidebar tokens now (herdr runs it on rename and new agents)
   queues.py color Q C    queue Q's colour (red orange yellow green cyan purple pink grey, none); colorby queue|machine
   queues.py host H icon E | host H color C   a machine's emoji (overrides herdr-machine-icons) and colour
-  queues.py host H spin N|off|default         machine H's spinner frames a second (default 4; 1 on a lean host)
+  queues.py host H spin N|off|default         machine H's spinner frames a second (default 1)
   queues.py headings queue|machine|off;  collapse Q;  mark own|herdr;  spinner on|off;  badge model|gitstatus V [E]
   queues.py status NAME GLYPH|default;  status NAME color COLOUR|none;  status spin 'F1 F2 ...'|default   (NAME: blocked draft asks asks_seen done done_seen background idle working unknown revisit pin lowctx)
   queues.py context N|off    flag (🪫) an agent with less than N % of its context left; off by default
@@ -912,20 +912,13 @@ def sock(method, params):
     return rpc(method, params, "spin")
 
 
-def lean_host():
-    """A machine set up to run lean: `~/bin/lean-host` exits 0 there (the author's fleet convention; absent elsewhere)."""
-    try:
-        return subprocess.run([os.path.expanduser("~/bin/lean-host")], timeout=5).returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-
-
-def spin_rate(state, lean):
-    """This machine's spinner frames a second: `host HOST spin N|off`, else 4, or 1 on a lean host. Each frame is a
-    metadata update per working agent, which the herdr server redraws: 4/s cost ~6 % of a core on micro (i3-3227U,
-    measured 2026-11-16, station-maintenance fleet 39). 0 = off: the mark stays as it is."""
+def spin_rate(state):
+    """This machine's spinner frames a second: `host HOST spin N|off`, else 1. Each frame is a metadata update per working
+    agent, which the herdr server redraws: 4/s cost ~6 % of a core on micro (i3-3227U, 2026-11-16, station-maintenance
+    fleet 39) and 10-17 % on beast-arch with ~6 agents working (2026-11-19: 3-6 % with the spinner paused), so the
+    default dropped from 4 to 1 (Ben 2026-11-19). 0 = off: the mark stays as it is."""
     v = host_setting(state, HOST, "spin")
-    return 0.0 if v == "off" else float(v) if v else 1.0 if lean else 4.0
+    return 0.0 if v == "off" else float(v) if v else 1.0
 
 
 def spin_loop():
@@ -936,7 +929,7 @@ def spin_loop():
     lock = open(os.path.join(STATE_DIR, "spin.lock"), "w")
     if not file_lock(lock, wait=False):
         sys.exit(0)
-    state, seen, i, checked, lean = {}, None, 0, time.time(), lean_host()
+    state, seen, i, checked = {}, None, 0, time.time()
     while True:
         if time.time() - checked > 60:
             checked = time.time()
@@ -947,7 +940,7 @@ def spin_loop():
                 state, seen = load(), m
         except OSError:
             pass
-        rate = spin_rate(state, lean)
+        rate = spin_rate(state)
         if not (state.get("spinner") and state.get("mark") == "own" and rate > 0):
             time.sleep(2)
             continue
@@ -2354,7 +2347,7 @@ def settings(scr, state, ms):
                 continue
             if what == 2 and k == "host":
                 sp = ["4", "2", "1", "off", "default"]
-                j = choose(scr, f"{v}: spinner frames a second (off: still; default: 4, or 1 on a lean host)",
+                j = choose(scr, f"{v}: spinner frames a second (off: still; default: 1)",
                            ["4/s", "2/s", "1/s", "off (still)", "default"])
                 if j is None:
                     continue
