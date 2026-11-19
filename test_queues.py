@@ -212,3 +212,12 @@ _r = q.real([{"pane_id": "a", "agent": "pi", "agent_status": "idle", "state_chan
              {"pane_id": "c", "agent": "claude", "agent_status": "idle", "state_change_seq": 9, "tokens": {}}])
 assert [a["agent_status"] for a in _r] == ["done", "idle", "idle"], _r
 print("ok")
+
+# a draft: text in the box between the last two rules; a dim (SGR 2) suggestion is not one
+_rule = "─" * 20
+for _box, _want in (("❯\xa0", False), ("❯\xa0\x1b[2mTry \"fix lint\"\x1b[0m", False), ("❯\xa0\x1b[38;2;1;2;3m/loop x\x1b[0m", True)):
+    q.herdr = lambda *a, _b=_box, **k: "\n".join(["out", _rule, _b, _rule, "  INSERT"])
+    assert q.draft("w1:p1") is _want, _box
+_a = {"agent_status": "done", "tokens": {"queues_draft": "1", "queues_asks": "1"}}
+assert q.need(_a) == "draft"
+print("ok")

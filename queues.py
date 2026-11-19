@@ -14,7 +14,7 @@ each with one line of what it needs. Enter jumps to the agent, switching the her
   queues.py host H icon E | host H color C   a machine's emoji (overrides herdr-machine-icons) and colour
   queues.py host H spin N|off|default         machine H's spinner frames a second (default 4; 1 on a lean host)
   queues.py headings queue|machine|off;  collapse Q;  mark own|herdr;  spinner on|off;  badge model|gitstatus V [E]
-  queues.py status NAME GLYPH|default;  status NAME color COLOUR|none;  status spin 'F1 F2 ...'|default   (NAME: blocked asks asks_seen done done_seen background idle working unknown)
+  queues.py status NAME GLYPH|default;  status NAME color COLOUR|none;  status spin 'F1 F2 ...'|default   (NAME: blocked draft asks asks_seen done done_seen background idle working unknown)
   queues.py rows         herdr's [ui.sidebar.agents] for the mark style (colours are settings: it never changes)
   queues.py spin         the spinner (herdr starts it with the server)
   queues.py entries on|off   experimental: each queue heading an entry of its own; clicking it collapses the queue
@@ -698,6 +698,7 @@ def info(a, state):
     stopped = a.get("agent_status") in ("done", "idle")
     out["queues_asks"] = "1" if stopped and sid and asks(sid) else None
     out["queues_bg"] = "1" if stopped and a.get("agent") == "claude" and background(a["pane_id"]) else None
+    out["queues_draft"] = "1" if stopped and a.get("agent") == "claude" and draft(a["pane_id"]) else None
     return out
 
 
@@ -743,6 +744,23 @@ def asks_text(text):
 
 
 BG = re.compile(r"· \d+ (shells?|background tasks?)\b")
+
+
+RULE = re.compile(r"^\s*─")
+
+
+def draft(pane):
+    """A prompt typed into the agent's box and not sent (Ben 2026-11-19): the text between the box's two rules, Claude
+    Code's dim (SGR 2) suggestion dropped, the ❯ mark and blanks stripped."""
+    try:
+        ansi = herdr(None, "agent", "read", pane, "--source", "visible", "--ansi", timeout=4)
+    except (RuntimeError, OSError, subprocess.TimeoutExpired):
+        return False
+    lines = [re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", re.sub(r"\x1b\[2m[^\x1b\n]*", "", ln)) for ln in ansi.split("\n")]
+    r = [i for i, ln in enumerate(lines) if RULE.match(ln)]
+    if len(r) < 2:
+        return False
+    return any(ln.replace("\r", "").strip().removeprefix("❯").replace("\xa0", " ").strip() for ln in lines[r[-2] + 1:r[-1]])
 
 
 def background(pane):
@@ -1136,7 +1154,7 @@ WJ, PAD = "\u2060", "\u2800"
 # and an agent waiting on its own shell or subagent needs nothing from you. Width-1 marks are padded to two.
 # Done: one check shape, green until seen (Ben: "the same as the grey checkbox but green"): no emoji is a bare green
 # check, so ✔ (text, unlike ✅) turns its row green by rule, as 🔴 turns a blocked row red.
-MARKS = {"blocked": "🔴", "asks": "❓", "asks_seen": "❔", "done": "✔", "done_seen": "✓", "background": "⏳",
+MARKS = {"blocked": "🔴", "draft": "📝", "asks": "❓", "asks_seen": "❔", "done": "✔", "done_seen": "✓", "background": "⏳",
          "idle": PAD * 2, "working": "\uee06", "unknown": "·"}
 # A Nerd Font arc (Symbols Nerd Font, on every desk), turning (Ben: moons, clocks, globe all rejected). Frames are a
 # list: a frame may be more than one character.
@@ -1146,7 +1164,7 @@ SPIN = ["\uee06", "\uee07", "\uee08", "\uee09", "\uee0a", "\uee0b"]
 MARK_COLOURS = {"blocked": "red", "done": "green", "working": "yellow"}
 # auto sort (Ben 2026-11-16): stuck on you first, then finished and not yet looked at, then working (its own background
 # shell counts), idle last; a question or a finish you have looked at is idle.
-NEED = {"blocked": 0, "asks": 1, "done": 2, "working": 3, "background": 3, "asks_seen": 4, "done_seen": 4, "idle": 4}
+NEED = {"blocked": 0, "draft": 1, "asks": 1, "done": 2, "working": 3, "background": 3, "asks_seen": 4, "done_seen": 4, "idle": 4}
 
 
 def need(a):
@@ -1156,6 +1174,8 @@ def need(a):
     if st in ("working", "blocked") or st not in ("done", "idle"):
         return st if st in ("working", "blocked") else "unknown"
     seen = st == "idle" or t.get("queues_seen") == str(a.get("state_change_seq"))
+    if t.get("queues_draft"):  # you started a reply and didn't send it
+        return "draft"
     if t.get("queues_asks"):
         return "asks_seen" if seen else "asks"
     if t.get("queues_bg"):

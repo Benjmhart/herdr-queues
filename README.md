@@ -267,16 +267,16 @@ emoji or headings (colours are an invisible marker in the text, matched by fixed
 
 **Status marks.** With `mark herdr` the row starts with herdr's own `state_icon`. herdr can't pad before it and indents
 an entry's second line by two, so the first agent under a heading sits two columns right of the rest. With `mark own`
-the plugin draws the mark as coloured emoji: 🔴 blocked on an approval or question dialog (its name red too); ❓ stopped
+the plugin draws the mark as coloured emoji: 🔴 blocked on an approval or question dialog (its name red too); 📝 a prompt you typed into it and haven't sent; ❓ stopped
 on a question to you, ❔ once you have looked at it; ✔ finished (its row green), ✓ once you have looked at it; ⏳ stopped but running
 its own background shell (nothing needed from you); a turning Nerd Font arc while working (needs a Nerd Font; Symbols Nerd Font is enough); nothing when idle.
 "A question" is read from a Claude session's transcript (its last reply ends a paragraph with `?`), background work
-from Claude Code's footer (`· 1 shell`), and "looked at" is focusing the agent since it stopped (herdr's own seen
+from Claude Code's footer (`· 1 shell`), a draft from its input box (dim suggestions don't count), and "looked at" is focusing the agent since it stopped (herdr's own seen
 state is per client). A mark can colour its row (blocked red, done green, working yellow by default): a herdr rule
 colours a whole token, so the spinner can't be yellow on its own. Every mark, its colour and each spinner frame are
 settings, synced to every machine:
 
-    python3 queues.py status done ✅               # a mark: blocked asks asks_seen done done_seen background idle working unknown
+    python3 queues.py status done ✅               # a mark: blocked draft asks asks_seen done done_seen background idle working unknown
     python3 queues.py status working color none    # the row's colour: red orange yellow green cyan purple pink grey, or none
     python3 queues.py status spin '◐ ◓ ◑ ◒'        # spinner frames, space-separated; `default` puts any of them back
  and pads it, so every
