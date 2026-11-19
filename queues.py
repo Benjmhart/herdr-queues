@@ -2526,7 +2526,7 @@ def ui(scr):
                     line = f" {ICON.get(st, '?')} {(a['machine'] + ' · ') if a['machine'] else ''}{'[' + lane(state, a) + '] ' if lane(state, a) else ''}{a['workspace']}  {title}"
                     line += "  · inactive" if inactive(state, a) else ""
                     line += "  · no alerts" if quiet(state, a) else ""
-                    line += "".join(f"  · {g} {w}" for _, g, w in flags_of(state, a))
+                    line += "".join(f"  · {g} {words}" for _, g, words in flags_of(state, a))
                     line += f"  — {s if s is not None else '…'}" if st in WAITING else ""
                     put_str(scr, row, 0, line.ljust(w - 1), C.get("select", curses.A_REVERSE) | curses.A_BOLD)
                     continue
@@ -2542,8 +2542,8 @@ def ui(scr):
                     x = put_str(scr, row, x, "  · inactive", C.get("help", 0))
                 if quiet(state, a):
                     x = put_str(scr, row, x, "  · no alerts", C.get("help", 0))
-                for _, g, w in flags_of(state, a):
-                    x = put_str(scr, row, x, f"  · {g} {w}", C.get("summary", 0))
+                for _, g, words in flags_of(state, a):
+                    x = put_str(scr, row, x, f"  · {g} {words}", C.get("summary", 0))
                 if st in WAITING:
                     put_str(scr, row, x + 2, "— " + (s if s is not None else "…"), C.get("summary", 0))
             if len(q) > rows:  # where you are in a long list
