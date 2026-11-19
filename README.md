@@ -321,6 +321,13 @@ It is a template. Fields: `{queue}` (icon, or name when it has none; empty while
 an empty field drops out with its spaces. A new agent, a status change or a renamed workspace shows at once (herdr runs `queues.py refresh`); `s`, a new template or a
 queue change shows within the watcher's minute. The watcher follows a plugin update by itself.
 
+### Low context: 🪫
+
+`queues.py context 60` flags an agent with less than 60 % of its context left: 🪫 at the end of its sidebar label
+(whatever your format; `{lowctx}` places it yourself) and "🪫 35% context left" on its popup line. `context off`
+removes it (the default). The figure is `$usage` (see Info tokens), so it needs the Claude status line that records
+it; agents without one are never flagged.
+
 ### Lanes: several agents in one workspace
 
 Two agents working the same repo look the same in the sidebar. A **lane** is a short tag of your own on one agent,

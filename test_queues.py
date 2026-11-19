@@ -221,3 +221,13 @@ for _box, _want in (("❯\xa0", False), ("❯\xa0\x1b[2mTry \"fix lint\"\x1b[0m"
 _a = {"agent_status": "done", "tokens": {"queues_draft": "1", "queues_asks": "1"}}
 assert q.need(_a) == "draft"
 print("ok")
+
+# low context (🪫): below the configured % left; off by default; shown at the label's end
+_a = {"tokens": {"usage": "45"}, "workspace": "api"}
+assert q.context_left(_a) == 55
+assert not q.low_context({}, _a) and q.low_context({"low_context": 60}, _a) and not q.low_context({"low_context": 50}, _a)
+assert q.label(_a, "", "{workspace}", low=True) == "api 🪫"
+_st = {"queues": [], "members": {}}
+assert q.setting(_st, "context", ["60"]) is None and _st["low_context"] == 60
+assert q.setting(_st, "context", ["off"]) is None and _st["low_context"] is None
+print("ok")

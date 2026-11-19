@@ -15,6 +15,7 @@ each with one line of what it needs. Enter jumps to the agent, switching the her
   queues.py host H spin N|off|default         machine H's spinner frames a second (default 4; 1 on a lean host)
   queues.py headings queue|machine|off;  collapse Q;  mark own|herdr;  spinner on|off;  badge model|gitstatus V [E]
   queues.py status NAME GLYPH|default;  status NAME color COLOUR|none;  status spin 'F1 F2 ...'|default   (NAME: blocked draft asks asks_seen done done_seen background idle working unknown)
+  queues.py context N|off    flag (🪫) an agent with less than N % of its context left; off by default
   queues.py rows         herdr's [ui.sidebar.agents] for the mark style (colours are settings: it never changes)
   queues.py spin         the spinner (herdr starts it with the server)
   queues.py entries on|off   experimental: each queue heading an entry of its own; clicking it collapses the queue
@@ -613,7 +614,24 @@ def icon(state, name):
 # A field the pane doesn't have is empty; empty fields drop out with their spaces.
 LABEL = "{queue}{machine} {workspace}"
 PLAIN = "{workspace}"
-FIELDS = ("queue", "machine", "workspace", "lane", "host", "agent", "title", "model", "gitstatus", "usage", "usage_pct")
+FIELDS = ("queue", "machine", "workspace", "lane", "host", "agent", "title", "model", "gitstatus", "usage", "usage_pct",
+          "lowctx")
+LOWCTX = "🪫"
+
+
+def context_left(a):
+    """% of context left from the agent's $usage token (used %), or None."""
+    u = (a.get("tokens") or {}).get("usage")
+    try:
+        return 100 - int(u)
+    except (TypeError, ValueError):
+        return None
+
+
+def low_context(state, a):
+    """Ben 2026-11-19: flag an agent with less than `context N` % of its context left (his: 60)."""
+    left, n = context_left(a), (state or {}).get("low_context")
+    return n is not None and left is not None and left < n
 
 
 class Blank(dict):
@@ -621,7 +639,9 @@ class Blank(dict):
         return ""
 
 
-def label(a, qi, fmt=LABEL, machine=None, lane=""):
+def label(a, qi, fmt=LABEL, machine=None, lane="", low=False):
+    if low and "{lowctx}" not in fmt:  # the flag shows whatever your format, at its end
+        fmt += " {lowctx}"
     if lane and "{lane}" not in fmt:  # a format of your own written before lanes still shows them
         fmt = fmt.replace("{workspace}", "{lane} {workspace}") if "{workspace}" in fmt else fmt + " {lane}"
     toks = {k: v for k, v in (a.get("tokens") or {}).items() if not k.startswith("queues_")}  # not its own
@@ -629,7 +649,7 @@ def label(a, qi, fmt=LABEL, machine=None, lane=""):
               workspace=a.get("workspace") or a.get("workspace_id", ""), lane=f"[{lane}]" if lane else "",
               host=a.get("host", ""),
               agent=a.get("agent", ""), title=a.get("terminal_title_stripped", ""),
-              usage_pct=f"{toks['usage']}%" if toks.get("usage") else "")
+              usage_pct=f"{toks['usage']}%" if toks.get("usage") else "", lowctx=LOWCTX if low else "")
     try:
         out = fmt.format_map(f)
     except (ValueError, IndexError, AttributeError):  # a broken format shows the default, not nothing
@@ -774,7 +794,7 @@ def background(pane):
 ON = ("queues", "auto")  # the queue sidebar's modes (`s`): static queue order, or re-sorted every minute
 
 
-SETTINGS = ("color", "colorby", "headings", "collapse", "badge", "host", "mark", "spinner", "entries", "status")
+SETTINGS = ("color", "colorby", "headings", "collapse", "badge", "host", "mark", "spinner", "entries", "status", "context")
 
 
 def setting(state, cmd, args):
@@ -822,6 +842,8 @@ def setting(state, cmd, args):
         else:
             m = state.setdefault("marks", {})
             m.pop(args[0], None) if args[1] == "default" else m.update({args[0]: args[1]})
+    elif cmd == "context" and args and (args[0] == "off" or (args[0].isdigit() and 0 < int(args[0]) <= 100)):
+        state["low_context"] = None if args[0] == "off" else int(args[0])  # flag below this % of context left
     elif cmd == "spinner" and args[0] in ("on", "off"):
         state["spinner"] = args[0] == "on"
     elif cmd == "entries" and args[0] in ("on", "off"):
@@ -1281,7 +1303,7 @@ def hiding(state, agents, host=HOST):
         # Under a heading the heading carries the colour and names keep herdr's text colour: a whole name in red or
         # green was hard to read on Ben's translucent terminal (2026-11-16). Blocked stays red (the 🔴 rule).
         mc = mark_colour(state, need(a)) if own else None  # the mark's colour takes the row, over the queue's
-        body = label(a, qi, fmt, host_setting(state, a.get("host"), "icon"), lane(state, a)) + (
+        body = label(a, qi, fmt, host_setting(state, a.get("host"), "icon"), lane(state, a), low_context(state, a)) + (
             marker(mc) if mc else "" if heads or entries else colour(a))
         if own:
             mark = mark_of(a, spin, state)
@@ -2474,6 +2496,7 @@ def ui(scr):
                     line = f" {ICON.get(st, '?')} {(a['machine'] + ' · ') if a['machine'] else ''}{'[' + lane(state, a) + '] ' if lane(state, a) else ''}{a['workspace']}  {title}"
                     line += "  · inactive" if inactive(state, a) else ""
                     line += "  · no alerts" if quiet(state, a) else ""
+                    line += f"  · {LOWCTX} {context_left(a)}% context left" if low_context(state, a) else ""
                     line += f"  — {s if s is not None else '…'}" if st in WAITING else ""
                     put_str(scr, row, 0, line.ljust(w - 1), C.get("select", curses.A_REVERSE) | curses.A_BOLD)
                     continue
@@ -2489,6 +2512,8 @@ def ui(scr):
                     x = put_str(scr, row, x, "  · inactive", C.get("help", 0))
                 if quiet(state, a):
                     x = put_str(scr, row, x, "  · no alerts", C.get("help", 0))
+                if low_context(state, a):
+                    x = put_str(scr, row, x, f"  · {LOWCTX} {context_left(a)}% context left", C.get("summary", 0))
                 if st in WAITING:
                     put_str(scr, row, x + 2, "— " + (s if s is not None else "…"), C.get("summary", 0))
             if len(q) > rows:  # where you are in a long list
