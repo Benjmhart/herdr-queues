@@ -195,3 +195,20 @@ assert q.setting(st, "host", [q.HOST, "spin", "default"]) is None and q.spin_rat
 assert q.spin_rate(st, True) == 1.0                                      # a lean host's default
 assert q.setting(st, "host", ["other", "spin", "0.5"]) is None and q.spin_rate(st, False) == 4.0  # not this host's
 print("ok")
+
+# search (/): every word, case-blind, in machine / lane / queue / workspace / title / folder
+_s = {"queues": ["work"], "members": {"s:x": "work"}, "lanes": {"s:x": "chores"}}
+_a = {"machine": "carbon", "workspace": "api-server", "terminal_title_stripped": "Fix login", "cwd": "/home/u/api",
+      "agent_session": {"value": "x"}, "pane_id": "w1:p1"}
+assert q.matches(_s, _a, "API carbon")
+assert q.matches(_s, _a, "chores work login")
+assert not q.matches(_s, _a, "api docs")
+assert q.matches(_s, _a, "")
+print("ok")
+
+# a non-claude agent's unseen idle is done (pi goes straight from working to idle); claude's idle and a seen one stay idle
+_r = q.real([{"pane_id": "a", "agent": "pi", "agent_status": "idle", "state_change_seq": 22, "tokens": {"queues_seen": "4"}},
+             {"pane_id": "b", "agent": "pi", "agent_status": "idle", "state_change_seq": 22, "tokens": {"queues_seen": "22"}},
+             {"pane_id": "c", "agent": "claude", "agent_status": "idle", "state_change_seq": 9, "tokens": {}}])
+assert [a["agent_status"] for a in _r] == ["done", "idle", "idle"], _r
+print("ok")

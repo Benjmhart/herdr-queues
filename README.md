@@ -45,10 +45,25 @@ key = "prefix+u"
 type = "plugin_action"
 command = "benjmhart.queues.open"
 description = "agents waiting on me, by queue"
+
+[[keys.command]]
+key = "prefix+/"
+type = "plugin_action"
+command = "benjmhart.queues.search"
+description = "find any agent on any machine"
 ```
 
 Python 3 standard library only. Install it on every machine you connect to with `herdr machine`, since the popup
 runs on whichever machine the window is showing.
+
+## Search: any agent, on any machine
+
+`/` in the popup, or the `search` action straight from a key (`prefix+/` above), searches every agent on every
+machine at once, whatever its queue. Type words: an agent matches when each word appears in its machine, lane,
+queue, workspace, title or folder (`api urgent`, `carbon docs`). Waiting agents come first. ↑↓ pick one, enter goes
+there (to another machine too), backspace edits, esc leaves the search (or closes the popup it opened).
+
+![Searching for "api" in the popup](docs/search.png)
 
 ## Several machines: setup
 
@@ -309,9 +324,8 @@ queue change shows within the watcher's minute. The watcher follows a plugin upd
 ### Lanes: several agents in one workspace
 
 Two agents working the same repo look the same in the sidebar. A **lane** is a short tag of your own on one agent,
-shown in brackets between the machine icon and the workspace name, `🐺 [urgent] mlabs-marketing` and
-`🐺 [chores] mlabs-marketing`: `t` in
-the popup types it (empty clears it), or from a shell on the agent's machine:
+shown in brackets between the machine icon and the workspace name, `🐺 [urgent] api-server` and
+`🐺 [chores] api-server`: `t` in the popup types it (empty clears it), or from a shell on the agent's machine:
 
     python3 queues.py lane w5:p3 urgent     # a pane id, from `herdr pane list`
     python3 queues.py lane here chores      # run inside the agent's own pane

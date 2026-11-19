@@ -4,6 +4,7 @@ each with one line of what it needs. Enter jumps to the agent, switching the her
 
   queues.py ui           the popup (the plugin's pane)
   queues.py open         opens the popup (the plugin's action)
+  queues.py open --search  opens it in search mode (the search action)
   queues.py standalone   the same list outside herdr (a desktop key); jumps directly
   queues.py watch        run on the machine you sit at: carries out jumps asked for by a popup on any machine
   queues.py jump M P     switch the herdr window to machine M and focus pane P
@@ -883,7 +884,7 @@ def spin_loop():
         time.sleep(1 / rate)
         i += 1
         try:
-            for a in sock("agent.list", {})["result"]["agents"]:
+            for a in real(sock("agent.list", {})["result"]["agents"]):
                 lab = (a.get("tokens") or {}).get("queues_label") or ""
                 fr = spin_frames(state)
                 hit = re.compile("|".join(map(re.escape, sorted(fr, key=len, reverse=True))))
@@ -910,7 +911,15 @@ def agent_panes():
 
 
 def real(agents):
-    return [a for a in agents if not (a.get("tokens") or {}).get("queues_heading_for")]
+    """The agents (no heading entries), each with done for an unseen finish: herdr's idle means "seen" only for claude.
+    Other agents (pi on media-center, 2026-11-19) go straight from working to idle when they finish, so their idle
+    reads as done until you focus them (queues_seen = the state_change_seq, set by focused())."""
+    out = [a for a in agents if not (a.get("tokens") or {}).get("queues_heading_for")]
+    for a in out:
+        if (a.get("agent_status") == "idle" and a.get("agent") not in ("claude", "muse")
+                and (a.get("tokens") or {}).get("queues_seen") != str(a.get("state_change_seq"))):
+            a["agent_status"] = "done"
+    return out
 
 
 HEADING = "{arrow} {icon} {name} {active}"
@@ -970,7 +979,7 @@ def entries_sync(state, listed):
         # agent is reported again whenever it is missing (else every pass made another heading: 2026-11-15 sandbox).
         heads_here = [p for p in json.loads(herdr(None, "pane", "list"))["result"]["panes"]
                       if (p.get("tokens") or {}).get("queues_heading_for")]
-        agents_now = {a["pane_id"]: a for a in json.loads(herdr(None, "agent", "list"))["result"]["agents"]}
+        agents_now = {a["pane_id"]: a for a in real(json.loads(herdr(None, "agent", "list"))["result"]["agents"])}
         for h in heads_here:  # the pane list never says which agent a pane holds
             h["agent"] = (agents_now.get(h["pane_id"]) or {}).get("agent")
             h["status"] = (agents_now.get(h["pane_id"]) or {}).get("agent_status")
@@ -1080,7 +1089,7 @@ def refresh_once(fresh_info=True):
         if os.environ.get("HERDR_PLUGIN_EVENT") == "pane.agent_detected":
             time.sleep(1)  # herdr-machine-icons runs on the same event: let its icon land first
         state = load()
-        listed = json.loads(herdr(None, "agent", "list"))["result"]["agents"]
+        listed = real(json.loads(herdr(None, "agent", "list"))["result"]["agents"])
         listed = real(listed)
         if learn(state, listed):
             save(state)
@@ -2016,7 +2025,7 @@ def nag(ms, notify=True):
         ags, prompts, state, here, seen_elsewhere = [], [], load(), None, []
         for m in ms:
             try:
-                listed = json.loads(herdr(m, "agent", "list", timeout=4))["result"]["agents"]
+                listed = real(json.loads(herdr(m, "agent", "list", timeout=4))["result"]["agents"])
                 heads_here = [a for a in listed if (a.get("tokens") or {}).get("queues_heading_for")]
                 listed = real(listed)
                 ws = json.loads(herdr(m, "workspace", "list", timeout=4))["result"]["workspaces"]
@@ -2073,11 +2082,11 @@ def nag(ms, notify=True):
 
 # --- the list ---------------------------------------------------------------------------------------------------
 
-HELP = ("←→/h l/tab queue · ↑↓/j k pgup pgdn g G · enter: go to agent · m: move to queue · 1-9: move to that queue · a: waiting only/all\n"
+HELP = ("←→/h l/tab queue · ↑↓/j k pgup pgdn g G · enter: go to agent · m: move to queue · 1-9: move to that queue · a: waiting only/all · /: search every agent\n"
         "J/K: move down/up in the queue · i: inactive (off herdr's sidebar, sinks to the bottom) · b: alerts on/off · t: lane (a tag of your own)\nqueues: n new · r rename · d delete · </> reorder · s: sidebar: your order / queues / queues, waiting first · c: collapse queue · ,: settings · q quit")
 # The mouse (Ben 2026-11-14: "clickable buttons and scrolling of the agent list for mouse users"): each button sends its
 # key. Click a tab to open it, a line to select it, the selected line again to go to it; the wheel scrolls.
-BUTTONS = [("go", "enter"), ("▲", "K"), ("▼", "J"), ("move", "m"), ("waiting/all", "a"), ("inactive", "i"), ("alerts", "b"), ("sort", "s"), ("collapse", "c"), ("settings", ","),
+BUTTONS = [("go", "enter"), ("▲", "K"), ("▼", "J"), ("move", "m"), ("waiting/all", "a"), ("inactive", "i"), ("alerts", "b"), ("sort", "s"), ("collapse", "c"), ("settings", ","), ("search", "/"),
            ("new", "n"), ("rename", "r"), ("delete", "d"), ("<", "<"), (">", ">"), ("quit", "q")]
 WHEEL_UP = getattr(curses, "BUTTON4_PRESSED", 0)
 WHEEL_DOWN = getattr(curses, "BUTTON5_PRESSED", 0x200000)  # ncurses 6; older Pythons lack the name
@@ -2353,6 +2362,14 @@ def put_str(scr, y, x, text, attr=0):
     return x + len(text)
 
 
+def matches(state, a, query):
+    """Search (/): every space-separated word of the query appears, case-blind, in the agent's machine, lane, queue,
+    workspace, title or folder."""
+    hay = " ".join([a.get("machine") or "", lane(state, a) or "", queue_of(state, a), a.get("workspace") or "",
+                    a.get("terminal_title_stripped") or "", a.get("cwd") or ""]).lower()
+    return all(w in hay for w in query.lower().split())
+
+
 def ui(scr):
     os.environ.setdefault("ESCDELAY", "25")
     curses.curs_set(0)
@@ -2366,6 +2383,10 @@ def ui(scr):
     # Every agent in the queue, waiting ones first (Ben 2026-11-14: a queue is worked through, so all of it shows);
     # `a` narrows it to the ones waiting on you. The number on a tab counts the waiting ones.
     state, cur, sel, everyone, msg, drawn, top = load(), None, 0, True, "", None, 0
+    # Search (Ben 2026-11-19: "a / search mode ... and a hotkey chord that can open a search directly, so that it
+    # subsumes the other navigation apps"): None = off; a string = every agent on every machine matching it.
+    direct = "--search" in sys.argv[2:]
+    query = "" if direct else None
     msg = skew(state, ms)
 
     seen = None
@@ -2383,6 +2404,8 @@ def ui(scr):
         if cur is not None:
             cur %= len(qs)
         q = members(state, agents, qs[cur or 0], everyone)
+        if query is not None:  # waiting ones first, then the rest, as the queues show them
+            q = sorted((a for a in agents if matches(state, a, query)), key=lambda a: a.get("agent_status") not in WAITING)
         sel = max(0, min(sel, len(q) - 1))
         h, w = scr.getmaxyx()
         hl = len(HELP.splitlines())
@@ -2395,8 +2418,8 @@ def ui(scr):
         rows = max(1, h - hl - 3)  # tabs, the help lines, the buttons, the list, the message line
         top = min(max(top, sel - rows + 1), sel, max(0, len(q) - rows))  # keep the selection in view
         top = max(0, top)
-        if drawn != (version, cur, sel, everyone, msg, len(state["queues"]), top, h, w):
-            drawn = (version, cur, sel, everyone, msg, len(state["queues"]), top, h, w)
+        if drawn != (version, cur, sel, everyone, msg, len(state["queues"]), top, h, w, query):
+            drawn = (version, cur, sel, everyone, msg, len(state["queues"]), top, h, w, query)
             scr.erase()
             hits, x = [], 0
             for i, s in enumerate(qs):
@@ -2417,6 +2440,8 @@ def ui(scr):
                 x = put_str(scr, y, x, f"[{label}]", C.get("machine", 0)) + 1
             if not live.loaded:
                 put_str(scr, 2 + hl, 2, f"loading {len(ms)} machines…", C.get("help", 0))
+            elif not q and query is not None:
+                put_str(scr, 2 + hl, 2, "no agent matches (backspace edits, esc leaves the search)")
             elif not q:
                 put_str(scr, 2 + hl, 2, "no agents in this queue (m on an agent in another queue moves it here)" if everyone
                         else "nothing waiting on you here (a: show all its agents)")
@@ -2449,11 +2474,34 @@ def ui(scr):
             if len(q) > rows:  # where you are in a long list
                 put_str(scr, h - 1, max(0, w - 12), f"{top + 1}-{min(len(q), top + rows)}/{len(q)}".rjust(11),
                         C.get("help", 0))
-            if msg:
+            if query is not None:  # the search line, in place of the message
+                put_str(scr, h - 1, 0, f"/{query}", curses.A_BOLD)
+                put_str(scr, h - 1, len(query) + 2, "↑↓ pick · enter go · esc " + ("close" if direct else "back to the queues"),
+                        C.get("help", 0))
+            elif msg:
                 put_str(scr, h - 1, 0, msg, C.get("summary", 0))
             scr.refresh()
 
         c = key(scr)
+        if query is not None and isinstance(c, str):  # typing goes to the search; arrows and enter work as usual
+            if c == "esc":
+                if direct:
+                    return
+                query, sel, drawn = None, 0, None
+                continue
+            if c == "backspace":
+                query, sel = query[:-1], 0
+                continue
+            if c == "enter" and q:
+                msg = go(q[sel], ms)
+                if not msg:
+                    return
+                continue
+            if len(c) == 1 and c.isprintable():
+                query, sel = query + c, 0
+                continue
+            if c not in ("up", "down", "pgup", "pgdn", "home", "end"):
+                continue
         if isinstance(c, tuple):  # the mouse: turned into the key it stands for
             _, mx, my, b = c
             what = next((t for y, x0, x1, t in hits if y == my and x0 <= mx < x1), None)
@@ -2495,6 +2543,8 @@ def ui(scr):
             sel = len(q) - 1
         elif c == "a":
             everyone = not everyone
+        elif c == "/":
+            query, sel = "", 0
         elif c == ",":
             mark = state.get("mark")
             msg = settings(scr, state, ms)
@@ -2658,7 +2708,8 @@ def main(cmd):
     elif cmd == "watch":
         watch(notify="--no-notify" not in sys.argv[2:])
     elif cmd == "open":
-        resp = rpc("plugin.pane.open", {"plugin_id": os.environ["HERDR_PLUGIN_ID"], "entrypoint": "ui", "focus": True,
+        ep = "search" if "--search" in sys.argv[2:] else "ui"
+        resp = rpc("plugin.pane.open", {"plugin_id": os.environ["HERDR_PLUGIN_ID"], "entrypoint": ep, "focus": True,
                                         "width": "98%", "height": "96%"}, "queues")
         if "error" in resp:
             raise RuntimeError(f"plugin.pane.open: {resp['error']}")
