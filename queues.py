@@ -748,6 +748,7 @@ def info(a, state):
     out["queues_asks"] = "1" if stopped and sid and asks(sid) else None
     out["queues_bg"] = "1" if stopped and a.get("agent") == "claude" and background(a["pane_id"]) else None
     out["queues_draft"] = "1" if stopped and a.get("agent") == "claude" and draft(a["pane_id"]) else None
+    out["queues_perm"] = "1" if a.get("agent") == "claude" and permission(a["pane_id"]) else None
     return out
 
 
@@ -810,6 +811,22 @@ def draft(pane):
     if len(r) < 2:
         return False
     return any(ln.replace("\r", "").strip().removeprefix("❯").replace("\xa0", " ").strip() for ln in lines[r[-2] + 1:r[-1]])
+
+
+# Claude Code's permission dialog ("Do you want to proceed?" over "❯ 1. Yes / 2. ... / 3. No"). herdr reads it as
+# blocked, but not always (Ben 2026-11-19: "under some circumstances"): the screen is the fallback. Only the bottom of
+# the screen counts, where the dialog stands in for the input box, so a quoted one in the conversation doesn't.
+PERM_Q = re.compile(r"^\W*Do you want to .*\?\s*$", re.M)
+PERM_YES = re.compile(r"^\W*1\. Yes\b", re.M)
+
+
+def permission(pane):
+    try:
+        text = herdr(None, "agent", "read", pane, "--source", "visible", timeout=4)
+    except (RuntimeError, OSError, subprocess.TimeoutExpired):
+        return False
+    tail = "\n".join([ln for ln in text.splitlines() if ln.strip()][-14:])
+    return bool(PERM_Q.search(tail) and PERM_YES.search(tail))
 
 
 def background(pane):
@@ -981,6 +998,8 @@ def real(agents):
         if (a.get("agent_status") == "idle" and a.get("agent") not in ("claude", "muse")
                 and (a.get("tokens") or {}).get("queues_seen") != str(a.get("state_change_seq"))):
             a["agent_status"] = "done"
+        if (a.get("tokens") or {}).get("queues_perm"):  # a permission dialog herdr missed (the minute screen read; it
+            a["agent_status"] = "blocked"                # clears at the next pass, up to a minute after you answer)
     return out
 
 

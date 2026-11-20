@@ -228,6 +228,15 @@ _a = {"agent_status": "done", "tokens": {"queues_draft": "1", "queues_asks": "1"
 assert q.need(_a) == "draft"
 print("ok")
 
+# a permission dialog on screen is blocked even when herdr says otherwise; a quoted one higher up is not
+_dlg = ["", " Bash command", "   rm -rf build", "", " Do you want to proceed?", " ❯ 1. Yes",
+        "   2. Yes, and don't ask again for rm commands", "   3. No, and tell Claude what to do differently (esc)"]
+for _scr, _want in ((_dlg, True), (_dlg + ["out"] * 15 + ["─" * 20, "❯ ", "─" * 20], False), (["Do you want to go?", "ok"], False)):
+    q.herdr = lambda *a, _s=_scr, **k: "\n".join(_s)
+    assert q.permission("w1:p1") is _want, _scr
+assert q.real([{"pane_id": "a", "agent": "claude", "agent_status": "working", "tokens": {"queues_perm": "1"}}])[0]["agent_status"] == "blocked"
+print("ok")
+
 # flags (🔖 revisit, 📌 pin, 🪫 low context): set by session key, own glyphs, at the label's end, searchable
 _s = {"queues": [], "members": {}, "low_context": 60}
 _a = {"agent_session": {"value": "z"}, "pane_id": "w1:p1", "workspace": "api", "tokens": {"usage": "45"}}
