@@ -60,7 +60,7 @@ runs on whichever machine the window is showing.
 
 `/` in the popup, or the `search` action straight from a key (`prefix+/` above), searches every agent on every
 machine at once, whatever its queue. Type words: an agent matches when each word appears in its machine, lane,
-queue, workspace, title or folder (`api urgent`, `carbon docs`). Waiting agents come first. ↑↓ pick one, enter goes
+queue, workspace, title or folder (`api urgent`, `laptop docs`). Waiting agents come first. ↑↓ pick one, enter goes
 there (to another machine too), backspace edits, esc leaves the search (or closes the popup it opened).
 
 ![Searching for "api" in the popup](docs/search.png)
@@ -79,7 +79,7 @@ connects to the others with `herdr machine`).
 3. **ssh from each desk to each machine, with no prompt** (`BatchMode`: a key or agent, the same target herdr uses).
    The watcher asks each machine its hostname once (`uname -n`, cached in `hosts.json` in the plugin's state), so a
    target may be an alias or an IP. Until it has asked (or if it can't), the name is guessed from the target
-   (`user@beast-arch.lan` → `beast-arch`), and a wrong guess files that machine's agents under a second name.
+   (`user@devbox.lan` → `devbox`), and a wrong guess files that machine's agents under a second name.
 4. **The watcher on each desk** (`queues.py watch`, with your desktop session; `--no-notify` where you don't want
    notifications). It carries out jumps, keeps the queues the same everywhere, keeps the sidebar marks up, and lists
    every machine's agents for the heading counts.
@@ -88,7 +88,7 @@ connects to the others with `herdr machine`).
    redraws, so the spinner is most of what this plugin costs herdr. At 4 frames a second it took ~6 % of a core on an
    i3-3227U, and 10-17 % of one on a 16-core desktop with about six agents working (3-6 % with the spinner paused),
    so the default is 1 frame a second (since 0.42.0; it was 4). Set it per machine, from any machine (the setting
-   travels with the queues): `queues.py host micro spin 2` (frames a second, up to 10), `spin off` (the mark stays
+   travels with the queues): `queues.py host netbook spin 2` (frames a second, up to 10), `spin off` (the mark stays
    still: no cost), `spin default`; or in the popup's settings, the machine's row.
 
 Which machine needs ssh to which:
@@ -237,7 +237,7 @@ same from a shell:
     python3 queues.py icon priority 🔥          # a queue's emoji
     python3 queues.py color priority red        # red orange yellow green cyan purple pink grey (Dracula), none
     python3 queues.py host desktop icon 🐺   # a machine's emoji (overrides herdr-machine-icons), or: color purple
-    python3 queues.py host micro spin 1      # a machine's spinner frames a second (off: still; default: 1)
+    python3 queues.py host netbook spin 1      # a machine's spinner frames a second (off: still; default: 1)
     python3 queues.py colorby machine           # colour rows by queue (default) or by machine
     python3 queues.py mark own                  # status marks drawn by the plugin: indented groups, spinner
     python3 queues.py spinner on                # working agents spin (needs mark own)

@@ -8,7 +8,7 @@ except ImportError:  # Python < 3.11 (macOS's own python3 is 3.9): the rows TOML
 sys.argv = ["x"]
 spec = importlib.util.spec_from_file_location("q", os.path.join(os.path.dirname(__file__), "queues.py"))
 q = importlib.util.module_from_spec(spec); spec.loader.exec_module(q)
-A = lambda p, ws, st: {"pane_id": p, "workspace": ws, "workspace_id": ws, "agent_status": st, "host": "micro",
+A = lambda p, ws, st: {"pane_id": p, "workspace": ws, "workspace_id": ws, "agent_status": st, "host": "netbook",
                        "tokens": {"machine_icon": "🐭"}, "agent": "claude", "terminal_id": "t" + p}
 ags = [A("p1", "a", "working"), A("p2", "b", "blocked"), A("p3", "c", "idle")]
 st = {"queues": ["priority", "work"], "members": {}, "icons": {"priority": "🔥"}, "sort": "queues", "headings": "queue", "colors": {"priority": None, "work": None}}  # no colour (0.30 defaults: below)
@@ -23,7 +23,7 @@ assert q.hiding(st, ags)[-1][0] == "agent.view.set"
 st["sort"] = "workspaces"; t = tok(st)  # off: plain names, no headings
 assert t["p2"]["queues_heading"] is None and t["p2"]["queues_label"] == "b"
 st.update(sort="auto", headings="machine", collapsed=[]); t = tok(st)
-assert t["p1"]["queues_heading"] == "🐭 micro" and t["p2"]["queues_heading"] is None
+assert t["p1"]["queues_heading"] == "🐭 netbook" and t["p2"]["queues_heading"] is None
 assert q.setting(st, "color", ["priority", "#ff5555"]) and not q.setting(st, "color", ["priority", "red"])
 r = q.rows_toml(st); toml_check(r); assert "$queues_heading_after" not in r and "state_icon" in r
 st.update(mark="own", headings="queue", sort="queues", spinner=True); r = q.rows_toml(st); toml_check(r)
@@ -35,7 +35,7 @@ assert t["p1"]["queues_label"] == q.SPIN[0] + "  🔥🐭 a" + q.marker("yellow"
 assert t["p2"]["queues_label"] == P * 2 + "🔴 🔥🐭 b" + q.marker("red") and t["p2"]["queues_heading"] is None
 assert t["p3"]["queues_label"] == P * 2 + " work🐭 c" and t["p3"]["queues_heading"] == "▾ work 1"
 assert all(t[p]["queues_heading_after"] is None for p in t)
-assert not q.setting(st, "host", ["micro", "icon", "🦊"]); t = tok(st); assert "🦊" in t["p1"]["queues_label"]
+assert not q.setting(st, "host", ["netbook", "icon", "🦊"]); t = tok(st); assert "🦊" in t["p1"]["queues_label"]
 d = tempfile.mkdtemp(); subprocess.run(["git", "-C", d, "init", "-q"])
 assert q.git_of(d) == "clean"; open(d + "/f", "w").write("x"); assert q.git_of(d) == "dirty"; assert q.git_of("/") is None
 st["badges"] = {"gitstatus": {"dirty": "±"}}; assert q.info({"cwd": d}, st)["gitstatus"] == "±"
@@ -72,7 +72,7 @@ assert len(q.changed([rq({"queues_heading": None})], ag)) == 1 and len(q.changed
 # heading entries (0.22): one list for every machine, sorted by queues_rank; each server shows its own headings
 st3 = {"queues": ["priority", "work"], "members": {}, "sort": "queues", "headings": "queue", "entries": True}
 b1, b2, b3 = A("p1", "a", "idle"), A("p2", "b", "blocked"), A("p3", "c", "idle")
-b2["host"] = "beast-arch"
+b2["host"] = "devbox"
 for a, qn in zip([b1, b2, b3], ["work", "priority", "priority"]):
     q.put(st3, a, qn)
 ranks = sorted([(q.rank_of(st3, a), a["pane_id"]) for a in (b1, b2, b3)] + [(q.rank_of(st3, q=g), g) for g in q.groups_of(st3)])
@@ -81,12 +81,12 @@ st3["sort"] = "auto"; q.put(st3, b3, "priority")
 assert q.rank_of(st3, b2) < q.rank_of(st3, b3)  # auto: blocked first
 st3["rank"] = {"priority": [q.keys(b3)[0]]}; assert q.rank_of(st3, b2) < q.rank_of(st3, b3)  # even ahead of J/K order
 st3["sort"] = "queues"; assert q.rank_of(st3, b3) < q.rank_of(st3, b2); st3.pop("rank")
-v = q.view(st3, "micro"); assert v["sort"][0]["field"] == {"token": "queues_rank"} and "micro" in str(v["filter"])
-assert q.view(dict(st3, entries=False), "micro") == q.VIEW
+v = q.view(st3, "netbook"); assert v["sort"][0]["field"] == {"token": "queues_rank"} and "netbook" in str(v["filter"])
+assert q.view(dict(st3, entries=False), "netbook") == q.VIEW
 st3["collapsed"] = ["priority"]
 t3 = {r[1]["pane_id"]: r[1]["tokens"] for r in q.hiding(st3, [b1, b2, b3]) if r[0] == "pane.report_metadata"}
 assert t3["p2"]["queues_inactive"] == "1" and t3["p3"]["queues_inactive"] == "1" and t3["p1"]["queues_inactive"] is None
-assert q.hiding(st3, [b1], "carbon")[-1][1] == q.view(st3, "carbon")
+assert q.hiding(st3, [b1], "laptop")[-1][1] == q.view(st3, "laptop")
 # finer marks (0.25): question vs job done, seen, background work
 D = lambda st, **tk: {"pane_id": "p", "agent_status": st, "state_change_seq": 7, "tokens": tk}
 assert q.need(D("done")) == "done" and q.need(D("done", queues_seen="7")) == "done_seen" and q.need(D("done", queues_seen="6")) == "done"
@@ -110,9 +110,9 @@ assert q.NEED["blocked"] < q.NEED["done"] < q.NEED["working"] < q.NEED["idle"] =
 print("ok")
 
 # The Goto guard (0.29.0): Return only when the label did not land in the pane.
-assert not q.typed_into_pane("micro", "$ ls\n", "$ ls\n")
-assert q.typed_into_pane("micro", "$ ls\n", "$ ls\n$ a/micro")
-assert q.typed_into_pane("micro", None, "x") and q.typed_into_pane("micro", "x", None)
+assert not q.typed_into_pane("netbook", "$ ls\n", "$ ls\n")
+assert q.typed_into_pane("netbook", "$ ls\n", "$ ls\n$ a/netbook")
+assert q.typed_into_pane("netbook", None, "x") and q.typed_into_pane("netbook", "x", None)
 # Key names per tool.
 sent = []
 q.tool, real_tool = (lambda *c, env=None: sent.append(c) or ""), q.tool
@@ -136,10 +136,10 @@ else:
         assert q.goto_keys() is None
 print("ok")
 
-# 0.31.0: membership survives a restart into a new pane followed by /clear (micro, 2026-11-16: lost to unsorted)
-S = lambda sid, t, cwd: {"pane_id": "w1:p1", "host": "micro", "agent_session": {"value": sid} if sid else None,
+# 0.31.0: membership survives a restart into a new pane followed by /clear (netbook, 2026-11-16: lost to unsorted)
+S = lambda sid, t, cwd: {"pane_id": "w1:p1", "host": "netbook", "agent_session": {"value": sid} if sid else None,
                          "terminal_id": t, "cwd": cwd}
-sm = {"queues": ["priority", "work"], "members": {"micro/t:term_old": "priority"}}  # filed before 0.31: terminal only
+sm = {"queues": ["priority", "work"], "members": {"netbook/t:term_old": "priority"}}  # filed before 0.31: terminal only
 old, new = S(None, "term_old", "/p/station"), S("s2", "term_new", "/p/station")
 assert q.queue_of(sm, new) == q.UNSORTED  # the 0.30 failure
 assert q.learn(sm, [old]) and not q.learn(sm, [old])  # backfills the folder key once, then nothing to save
@@ -147,15 +147,15 @@ assert q.queue_of(sm, new) == "priority" and q.learn(sm, [new]) and sm["members"
 # two agents in one folder, different queues: each keeps its own, and learn settles (no save every pass)
 other = S("s3", "term_3", "/p/station"); q.put(sm, other, "work")
 assert q.queue_of(sm, new) == "priority" and q.queue_of(sm, other) == "work" and not q.learn(sm, [new, other])
-assert q.folder(other) not in [q.keys(new)] and "micro/d:/p/station" not in q.keys(other)  # quiet/inactive/rank: not shared
+assert q.folder(other) not in [q.keys(new)] and "netbook/d:/p/station" not in q.keys(other)  # quiet/inactive/rank: not shared
 assert q.queue_colour({"queues": ["priority", "work"]}, "priority") == "red"  # 0.30 default colours
 assert q.queue_colour({"queues": ["priority"], "colors": {"priority": None}}, "priority") is None
 print("ok")
 
-# 0.32.0 (micro's multi-host review): collapsed counts, real hostnames, version skew
-sc = {"queues": ["priority"], "members": {"micro/t:a": "priority"}, "collapsed": ["unsorted", "priority"]}
-la = [{"pane_id": "p1", "host": "micro", "terminal_id": "a"}, {"pane_id": "p2", "host": "micro", "terminal_id": "b"},
-      {"pane_id": "p3", "host": "micro", "terminal_id": "c"}]
+# 0.32.0 (netbook's multi-host review): collapsed counts, real hostnames, version skew
+sc = {"queues": ["priority"], "members": {"netbook/t:a": "priority"}, "collapsed": ["unsorted", "priority"]}
+la = [{"pane_id": "p1", "host": "netbook", "terminal_id": "a"}, {"pane_id": "p2", "host": "netbook", "terminal_id": "b"},
+      {"pane_id": "p3", "host": "netbook", "terminal_id": "c"}]
 sc["inactive"] = q.keys(la[2])
 la[0].update(agent_status="blocked")
 assert q.head_counts(sc, la) == {"priority": {"active": 1, "waiting": 1, "hidden": 1},
@@ -163,26 +163,26 @@ assert q.head_counts(sc, la) == {"priority": {"active": 1, "waiting": 1, "hidden
 assert q.heading_text(sc, "unsorted", {"active": 2, "hidden": 2}, True) == "▸ unsorted 2"
 import json as _j, tempfile as _t
 q.HOSTS = os.path.join(_t.mkdtemp(), "hosts.json")
-q.herdr = lambda m, *a, **k: "id\tdesk\tben@100.64.0.5\tdefault\tenabled\nid\tcarbon\tcarbon\tdefault\tenabled\n"
+q.herdr = lambda m, *a, **k: "id\tdesk\tuser@100.64.0.9\tdefault\tenabled\nid\tlaptop\tlaptop\tdefault\tenabled\n"
 assert q.machines()["desk"][0] == "100"  # the old guess, until learned
-q.hostname_of = lambda t: {"ben@100.64.0.5": "beast-arch"}.get(t)  # carbon unreachable: not cached, guessed
+q.hostname_of = lambda t: {"user@100.64.0.9": "devbox"}.get(t)  # laptop unreachable: not cached, guessed
 ms = q.machines(learn=True)
-assert ms["desk"] == ("beast-arch", "ben@100.64.0.5") and ms["carbon"][0] == "carbon"
-assert _j.load(open(q.HOSTS)) == {"ben@100.64.0.5": "beast-arch"} and q.machines()["desk"][0] == "beast-arch"
-sv = {"versions": {q.HOST: q.VERSION, "beast-arch": q.VERSION}}
-assert q.skew(sv, ms) == "" or "carbon ?" in q.skew(sv, ms)
-assert "carbon ?" in q.skew(sv, ms) and "beast-arch" not in q.skew(sv, ms)
-sv["versions"]["carbon"] = "0.31.0"; assert "carbon 0.31.0" in q.skew(sv, ms)
-sv["versions"]["carbon"] = q.VERSION; assert q.skew(sv, ms) == ""
+assert ms["desk"] == ("devbox", "user@100.64.0.9") and ms["laptop"][0] == "laptop"
+assert _j.load(open(q.HOSTS)) == {"user@100.64.0.9": "devbox"} and q.machines()["desk"][0] == "devbox"
+sv = {"versions": {q.HOST: q.VERSION, "devbox": q.VERSION}}
+assert q.skew(sv, ms) == "" or "laptop ?" in q.skew(sv, ms)
+assert "laptop ?" in q.skew(sv, ms) and "devbox" not in q.skew(sv, ms)
+sv["versions"]["laptop"] = "0.31.0"; assert "laptop 0.31.0" in q.skew(sv, ms)
+sv["versions"]["laptop"] = q.VERSION; assert q.skew(sv, ms) == ""
 print("ok")
 
 # 0.33.0: the other machines' agents for this machine's headings, from the watcher's cache
 import time as _tm
 q.OTHERS = os.path.join(_t.mkdtemp(), "others.json")
 assert q.others() == []  # no cache yet
-_j.dump({"at": _tm.time(), "agents": [{"host": "carbon", "pane_id": "p9"}, {"host": q.HOST, "pane_id": "p1"}]}, open(q.OTHERS, "w"))
-assert [a["host"] for a in q.others()] == ["carbon"]  # this machine's own come from herdr, not the cache
-_j.dump({"at": _tm.time() - 600, "agents": [{"host": "carbon", "pane_id": "p9"}]}, open(q.OTHERS, "w"))
+_j.dump({"at": _tm.time(), "agents": [{"host": "laptop", "pane_id": "p9"}, {"host": q.HOST, "pane_id": "p1"}]}, open(q.OTHERS, "w"))
+assert [a["host"] for a in q.others()] == ["laptop"]  # this machine's own come from herdr, not the cache
+_j.dump({"at": _tm.time() - 600, "agents": [{"host": "laptop", "pane_id": "p9"}]}, open(q.OTHERS, "w"))
 assert q.others() == []  # stale: the watcher stopped
 print("ok")
 
@@ -191,8 +191,8 @@ assert q.sendkeys(names=["ctrl+b", "a", "slash"]) == "^ba/" and q.sendkeys(names
 assert q.sendkeys("a+b (x)~") == "a{+}b {(}x{)}{~}"
 
 # Windows titles herdr's window with the upper-case computer name (fleet 37, 2026-11-17)
-_w, q.windows = q.windows, lambda d=None: [("1", "WIN11VM: System32", True), ("2", "herdr: beast-arch: x", False), ("3", "Notes", False)]
-assert q.herdr_windows({"win11vm", "beast-arch"}) == [("1", "win11vm"), ("2", "beast-arch")]
+_w, q.windows = q.windows, lambda d=None: [("1", "WINVM: System32", True), ("2", "herdr: devbox: x", False), ("3", "Notes", False)]
+assert q.herdr_windows({"winvm", "devbox"}) == [("1", "winvm"), ("2", "devbox")]
 q.windows = _w
 st = {}                                                                   # per-host spinner speed
 assert q.setting(st, "host", [q.HOST, "spin", "1"]) is None and q.spin_rate(st) == 1.0
@@ -204,9 +204,9 @@ print("ok")
 
 # search (/): every word, case-blind, in machine / lane / queue / workspace / title / folder
 _s = {"queues": ["work"], "members": {"s:x": "work"}, "lanes": {"s:x": "chores"}}
-_a = {"machine": "carbon", "workspace": "api-server", "terminal_title_stripped": "Fix login", "cwd": "/home/u/api",
+_a = {"machine": "laptop", "workspace": "api-server", "terminal_title_stripped": "Fix login", "cwd": "/home/u/api",
       "agent_session": {"value": "x"}, "pane_id": "w1:p1"}
-assert q.matches(_s, _a, "API carbon")
+assert q.matches(_s, _a, "API laptop")
 assert q.matches(_s, _a, "chores work login")
 assert not q.matches(_s, _a, "api docs")
 assert q.matches(_s, _a, "")
@@ -256,9 +256,9 @@ _call, _ret = q.call, q.retoken
 q.call = lambda target, reqs: _calls.append((target, reqs))
 q.retoken = lambda *a: True
 try:
-    _a = {"agent_status": "idle", "state_change_seq": 22, "pane_id": "w2:p4", "machine": "media-center", "tokens": {}}
-    assert q.mark_seen({}, [_a], _a, {"media-center": ("media-center", "media-center")})
-    assert _calls[-1][0] == "media-center" and _calls[-1][1][0][1]["tokens"] == {"queues_seen": "22"} and _a["tokens"]["queues_seen"] == "22"
+    _a = {"agent_status": "idle", "state_change_seq": 22, "pane_id": "w2:p4", "machine": "nas", "tokens": {}}
+    assert q.mark_seen({}, [_a], _a, {"nas": ("nas", "nas")})
+    assert _calls[-1][0] == "nas" and _calls[-1][1][0][1]["tokens"] == {"queues_seen": "22"} and _a["tokens"]["queues_seen"] == "22"
     _l = {"agent_status": "done", "state_change_seq": 5, "pane_id": "w1:p1", "machine": "", "tokens": {}}
     assert q.mark_seen({}, [_l], _l, {}) and _calls[-1][0] is None
     _n = len(_calls)

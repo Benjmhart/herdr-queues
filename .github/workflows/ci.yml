@@ -1,4 +1,4 @@
-# Unit tests on Linux, macOS and Windows, and a smoke test against a real herdr (station-maintenance fleet 38).
+# Unit tests on Linux, macOS and Windows, and a smoke test against a real herdr.
 # Tag a release only from a commit whose run is green.
 name: ci
 on: [push, pull_request]
