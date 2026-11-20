@@ -277,7 +277,7 @@ emoji or headings (colours are an invisible marker in the text, matched by fixed
 
 **Status marks.** With `mark herdr` the row starts with herdr's own `state_icon`. herdr can't pad before it and indents
 an entry's second line by two, so the first agent under a heading sits two columns right of the rest. With `mark own`
-the plugin draws the mark as coloured emoji: 🔴 blocked on an approval or question dialog (its name red too; a Claude permission dialog herdr misses is caught on screen within a minute); 📝 a prompt you typed into it and haven't sent; ❓ stopped
+the plugin draws the mark as coloured emoji: 🔴 blocked on an approval or question dialog (its name red too; a Claude permission dialog herdr misses, still "working" to it, is caught on screen within 15 s); 📝 a prompt you typed into it and haven't sent; ❓ stopped
 on a question to you, ❔ once you have looked at it; ✔ finished (its row green), ✓ once you have looked at it; ⏳ stopped but running
 its own background shell (nothing needed from you); a turning Nerd Font arc while working (needs a Nerd Font; Symbols Nerd Font is enough); nothing when idle.
 "A question" is read from a Claude session's transcript (its last reply ends a paragraph with `?`), background work

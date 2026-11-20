@@ -998,8 +998,8 @@ def real(agents):
         if (a.get("agent_status") == "idle" and a.get("agent") not in ("claude", "muse")
                 and (a.get("tokens") or {}).get("queues_seen") != str(a.get("state_change_seq"))):
             a["agent_status"] = "done"
-        if (a.get("tokens") or {}).get("queues_perm"):  # a permission dialog herdr missed (the minute screen read; it
-            a["agent_status"] = "blocked"                # clears at the next pass, up to a minute after you answer)
+        if (a.get("tokens") or {}).get("queues_perm"):  # a permission dialog herdr missed (perm_watch, every 15 s; it
+            a["agent_status"] = "blocked"                # clears within 15 s of your answer)
     return out
 
 
@@ -1979,6 +1979,27 @@ def relay(ms):
         time.sleep(3)
 
 
+def perm_watch(every=15):
+    """A Claude permission dialog herdr doesn't report: herdr keeps such an agent "working" and fires no status event,
+    so the event-driven refresh never looks (mlabs-marketing, Ben 2026-11-20: "agents that are blocked that are marked
+    as still running"). Every 15 s, each claude pane's screen; a change in what it shows re-tokens the sidebar."""
+    while True:
+        time.sleep(every)
+        try:
+            ch = []
+            for a in json.loads(herdr(None, "agent", "list", timeout=4))["result"]["agents"]:
+                if a.get("agent") != "claude":
+                    continue
+                now = "1" if permission(a["pane_id"]) else None
+                if now != (a.get("tokens") or {}).get("queues_perm"):
+                    ch.append(["pane.report_metadata", {"pane_id": a["pane_id"], "source": INFO, "tokens": {"queues_perm": now}}])
+            if ch:
+                call(None, ch)
+                refresh(fresh_info=False)
+        except (RuntimeError, OSError, ValueError, KeyError, subprocess.SubprocessError):
+            pass
+
+
 def on_state_change():
     """Redraw this machine's sidebar as soon as the queues change (a collapse clicked on another machine arrives here as
     a new state file); the 60 s nag pass was the only redraw before (Ben 2026-11-16: collapse "inconsistent")."""
@@ -2008,6 +2029,7 @@ def watch(notify=True):
     threading.Thread(target=relay, args=(ms,), daemon=True).start()
     threading.Thread(target=nag, args=(ms, notify), daemon=True).start()
     threading.Thread(target=on_state_change, daemon=True).start()
+    threading.Thread(target=perm_watch, daemon=True).start()
     while True:
         time.sleep(60)
         follow_install(lock)
