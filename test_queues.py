@@ -266,4 +266,17 @@ try:
     assert not q.mark_seen({}, [], dict(_a, machine="nowhere"), {})   # unreachable: says so
 finally:
     q.call, q.retoken = _call, _ret
+
+# perm_watch's pass (0.46): only claudes herdr calls working, or that carry the mark; herdr's blocked is red already
+_perm = q.permission
+try:
+    shown = {"w1:p1": True, "w1:p2": True, "w1:p3": False, "w1:p4": True}
+    q.permission = lambda pane: shown[pane]
+    ch = q.perm_changes([{"agent": "claude", "pane_id": "w1:p1", "agent_status": "working"},          # dialog: marked
+                         {"agent": "claude", "pane_id": "w1:p2", "agent_status": "blocked"},          # herdr saw it
+                         {"agent": "claude", "pane_id": "w1:p3", "agent_status": "idle", "tokens": {"queues_perm": "1"}},  # answered
+                         {"agent": "pi", "pane_id": "w1:p4", "agent_status": "working"}])
+    assert [(c[1]["pane_id"], c[1]["tokens"]["queues_perm"]) for c in ch] == [("w1:p1", "1"), ("w1:p3", None)], ch
+finally:
+    q.permission = _perm
 print("ok")

@@ -998,8 +998,8 @@ def real(agents):
         if (a.get("agent_status") == "idle" and a.get("agent") not in ("claude", "muse")
                 and (a.get("tokens") or {}).get("queues_seen") != str(a.get("state_change_seq"))):
             a["agent_status"] = "done"
-        if (a.get("tokens") or {}).get("queues_perm"):  # a permission dialog herdr missed (perm_watch, every 15 s; it
-            a["agent_status"] = "blocked"                # clears within 15 s of your answer)
+        if (a.get("tokens") or {}).get("queues_perm"):  # a permission dialog herdr missed (perm_watch, every 2 s; it
+            a["agent_status"] = "blocked"                # clears within 2 s of your answer)
     return out
 
 
@@ -1979,25 +1979,34 @@ def relay(ms):
         time.sleep(3)
 
 
-def perm_watch(every=15):
+def perm_watch(every=2):
     """A Claude permission dialog herdr doesn't report: herdr keeps such an agent "working" and fires no status event,
     so the event-driven refresh never looks (mlabs-marketing, Ben 2026-11-20: "agents that are blocked that are marked
-    as still running"). Every 15 s, each claude pane's screen; a change in what it shows re-tokens the sidebar."""
+    as still running"). Every 2 s (15 s in 0.45: Ben 2026-11-21 "the biggest problem is the length of the delay"), the
+    screen of each claude herdr calls working or that carries the mark (a screen read is ~2 ms); a change in what it
+    shows re-tokens the sidebar."""
     while True:
         time.sleep(every)
         try:
-            ch = []
-            for a in json.loads(herdr(None, "agent", "list", timeout=4))["result"]["agents"]:
-                if a.get("agent") != "claude":
-                    continue
-                now = "1" if permission(a["pane_id"]) else None
-                if now != (a.get("tokens") or {}).get("queues_perm"):
-                    ch.append(["pane.report_metadata", {"pane_id": a["pane_id"], "source": INFO, "tokens": {"queues_perm": now}}])
+            ch = perm_changes(json.loads(herdr(None, "agent", "list", timeout=4))["result"]["agents"])
             if ch:
                 call(None, ch)
                 refresh(fresh_info=False)
         except (RuntimeError, OSError, ValueError, KeyError, subprocess.SubprocessError):
             pass
+
+
+def perm_changes(agents):
+    """The token reports for claudes whose permission dialog appeared or went (only those herdr calls working, or that
+    carry the mark: herdr's own blocked is red already)."""
+    ch = []
+    for a in agents:
+        if a.get("agent") != "claude" or (a.get("agent_status") != "working" and not (a.get("tokens") or {}).get("queues_perm")):
+            continue
+        now = "1" if permission(a["pane_id"]) else None
+        if now != (a.get("tokens") or {}).get("queues_perm"):
+            ch.append(["pane.report_metadata", {"pane_id": a["pane_id"], "source": INFO, "tokens": {"queues_perm": now}}])
+    return ch
 
 
 def on_state_change():
