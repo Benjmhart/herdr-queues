@@ -279,4 +279,25 @@ try:
     assert [(c[1]["pane_id"], c[1]["tokens"]["queues_perm"]) for c in ch] == [("w1:p1", "1"), ("w1:p3", None)], ch
 finally:
     q.permission = _perm
+
+# 0.47 event-driven permission marks: Claude hooks in settings, idempotent, others kept; a fresh hook mark wins
+import copy, time
+base = {"model": "x", "hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "bash herdr-agent-state.sh session"}]}]}}
+one = q.install_hooks(copy.deepcopy(base))
+assert set(one["hooks"]) == {"SessionStart", "PermissionRequest", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "Stop"}
+assert q.install_hooks(copy.deepcopy(one)) == one                      # twice = once
+assert q.install_hooks(copy.deepcopy(one), remove=True) == base        # removed, the rest untouched
+assert q.install_hooks({}, remove=True) == {}
+_perm, _dir = q.permission, q.PERM_DIR
+try:
+    q.PERM_DIR = tempfile.mkdtemp()
+    q.permission = lambda pane: False
+    assert not q.perm_on("w1:p1")
+    os.makedirs(q.PERM_DIR, exist_ok=True); open(q.perm_marker("w1:p1"), "w").close()
+    assert not q.perm_on("w1:p1", "idle")                                # after Esc: the screen decides
+    assert q.perm_on("w1:p1")                                            # the hook's mark, before the dialog is drawn
+    os.utime(q.perm_marker("w1:p1"), (time.time() - 10, time.time() - 10))
+    assert not q.perm_on("w1:p1")                                        # stale: the screen decides (Esc, "No")
+finally:
+    q.permission, q.PERM_DIR = _perm, _dir
 print("ok")

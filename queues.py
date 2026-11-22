@@ -748,7 +748,9 @@ def info(a, state):
     out["queues_asks"] = "1" if stopped and sid and asks(sid) else None
     out["queues_bg"] = "1" if stopped and a.get("agent") == "claude" and background(a["pane_id"]) else None
     out["queues_draft"] = "1" if stopped and a.get("agent") == "claude" and draft(a["pane_id"]) else None
-    out["queues_perm"] = "1" if a.get("agent") == "claude" and permission(a["pane_id"]) else None
+    # idle or done: no dialog can be up (its event comes before Claude redraws, so the screen may still show it: Esc
+    # in the sandbox kept the mark 11 s)
+    out["queues_perm"] = "1" if a.get("agent") == "claude" and not stopped and perm_on(a["pane_id"], a.get("agent_status")) else None
     return out
 
 
@@ -998,8 +1000,10 @@ def real(agents):
         if (a.get("agent_status") == "idle" and a.get("agent") not in ("claude", "muse")
                 and (a.get("tokens") or {}).get("queues_seen") != str(a.get("state_change_seq"))):
             a["agent_status"] = "done"
-        if (a.get("tokens") or {}).get("queues_perm"):  # a permission dialog herdr missed (perm_watch, every 2 s; it
-            a["agent_status"] = "blocked"                # clears within 2 s of your answer)
+        # a permission dialog herdr missed (Claude's PermissionRequest hook, or perm_watch); never over herdr's idle or
+        # done, which a closed dialog ("No", Esc) brings and which clears the mark at that event (info)
+        if (a.get("tokens") or {}).get("queues_perm") and a.get("agent_status") not in ("idle", "done"):
+            a["agent_status"] = "blocked"
     return out
 
 
@@ -1996,6 +2000,76 @@ def perm_watch(every=2):
             pass
 
 
+# Event-driven (0.47, Ben 2026-11-21: "is there any way we can do this without polling at all"): Claude's own hooks.
+# PermissionRequest fires as the dialog opens (sandbox: 0.1 s before it is drawn); PostToolUse(Failure),
+# UserPromptSubmit and Stop after it is answered (0.2 s after "Yes"). "No" and Esc fire no hook, but herdr then reports
+# the agent idle, and that status event re-reads the screen (info). `queues.py hooks` adds them to Claude's settings.
+PERM_DIR = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "herdr-queues-perm")
+PERM_FRESH = 3   # s: a hook's mark outlives a screen read made before the dialog is drawn
+
+
+def perm_marker(pane):
+    return os.path.join(PERM_DIR, pane.replace("/", "_"))
+
+
+def perm_on(pane, status="working"):
+    """A permission dialog is up: on screen, or a PermissionRequest hook in the last few seconds while herdr still
+    calls the agent working (once herdr says idle after "No" or Esc, the screen decides)."""
+    try:
+        if status == "working" and time.time() - os.path.getmtime(perm_marker(pane)) < PERM_FRESH:
+            return True
+    except OSError:
+        pass
+    return permission(pane)
+
+
+def perm_hook(state):
+    """`queues.py perm-hook on|off`, run by Claude's hooks in the agent's pane: the mark at once, no screen read."""
+    pane = os.environ.get("HERDR_PANE_ID")
+    if not pane:
+        return
+    f = perm_marker(pane)
+    if state == "on":
+        os.makedirs(PERM_DIR, exist_ok=True)
+        open(f, "w").close()
+    else:
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+    sock("pane.report_metadata", {"pane_id": pane, "source": INFO, "tokens": {"queues_perm": "1" if state == "on" else None}})
+    refresh(fresh_info=False)
+
+
+# The hook commands. "off" runs after every tool call, so it starts python only when this pane has a mark; both return
+# at once (backgrounded) so Claude never waits on the sidebar.
+_QPY = 'q=$(ls -dt "$HOME"/.config/herdr/plugins/github-installations/benjmhart.queues-*/*/checkout/queues.py 2>/dev/null | head -1); '
+HOOKS = {"on": _QPY + '[ -n "$HERDR_PANE_ID" ] && [ -n "$q" ] && (python3 "$q" perm-hook on >/dev/null 2>&1 &); true',
+         "off": '[ -e "${XDG_RUNTIME_DIR:-/tmp}/herdr-queues-perm/${HERDR_PANE_ID:-none}" ] && { ' + _QPY
+                + '[ -n "$q" ] && (python3 "$q" perm-hook off >/dev/null 2>&1 &); }; true'}
+HOOK_EVENTS = {"PermissionRequest": "on", "PostToolUse": "off", "PostToolUseFailure": "off", "UserPromptSubmit": "off",
+               "Stop": "off"}
+
+
+def install_hooks(settings, remove=False):
+    """Claude settings with this plugin's hooks added (or removed), others untouched; idempotent. Claude reads hooks at
+    startup: sessions running now get them when they restart."""
+    hooks = settings.setdefault("hooks", {})
+    mine = lambda h: "perm-hook" in (h.get("command") or "") and "queues.py" in (h.get("command") or "")
+    for ev in list(hooks):
+        for m in hooks[ev]:
+            m["hooks"] = [h for h in m.get("hooks", []) if not mine(h)]
+        hooks[ev] = [m for m in hooks[ev] if m.get("hooks")]
+        if not hooks[ev]:
+            del hooks[ev]
+    if not remove:
+        for ev, what in HOOK_EVENTS.items():
+            hooks.setdefault(ev, []).append({"hooks": [{"type": "command", "command": HOOKS[what]}]})
+    if not hooks:
+        del settings["hooks"]
+    return settings
+
+
 def perm_changes(agents):
     """The token reports for claudes whose permission dialog appeared or went (only those herdr calls working, or that
     carry the mark: herdr's own blocked is red already)."""
@@ -2003,7 +2077,7 @@ def perm_changes(agents):
     for a in agents:
         if a.get("agent") != "claude" or (a.get("agent_status") != "working" and not (a.get("tokens") or {}).get("queues_perm")):
             continue
-        now = "1" if permission(a["pane_id"]) else None
+        now = "1" if perm_on(a["pane_id"], a.get("agent_status")) else None
         if now != (a.get("tokens") or {}).get("queues_perm"):
             ch.append(["pane.report_metadata", {"pane_id": a["pane_id"], "source": INFO, "tokens": {"queues_perm": now}}])
     return ch
@@ -2850,6 +2924,23 @@ def main(cmd):
         spin_loop()
     elif cmd == "focused":
         focused()
+    elif cmd == "perm-hook":  # run by Claude's hooks (queues.py hooks)
+        perm_hook(sys.argv[2] if len(sys.argv) > 2 else "on")
+    elif cmd == "hooks":  # queues.py hooks [remove]: Claude's PermissionRequest etc. hooks in ~/.claude/settings.json
+        path = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"), "settings.json")
+        try:
+            cur = json.load(open(path, encoding="utf-8"))
+        except FileNotFoundError:
+            cur = {}
+        new = install_hooks(json.loads(json.dumps(cur)), remove=sys.argv[2:3] == ["remove"])
+        if new != cur:
+            tmp = path + ".queues-tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(new, fh, indent=2, ensure_ascii=False)
+                fh.write("\n")
+            os.replace(tmp, path)
+        print(f"{path}: {'removed' if sys.argv[2:3] == ['remove'] else 'hooks in'} ({'changed' if new != cur else 'already so'}); "
+              "Claude sessions pick them up when they (re)start")
     elif cmd == "rows":  # herdr's [ui.sidebar.agents] for these colours and headings: paste into config.toml
         print(rows_toml(load()))
     elif cmd == "label":  # queues.py label [FORMAT|default]: the sidebar's $queues_label; no argument shows it
