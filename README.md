@@ -56,6 +56,16 @@ description = "find any agent on any machine"
 Python 3 standard library only. Install it on every machine you connect to with `herdr machine`, since the popup
 runs on whichever machine the window is showing.
 
+For Claude Code agents, add the permission hooks (once per machine; `hooks remove` takes them out again):
+
+```sh
+python3 "$(ls -dt ~/.config/herdr/plugins/github-installations/benjmhart.queues-*/*/checkout/queues.py | head -1)" hooks
+```
+
+They mark an agent 🔴 the moment Claude opens a permission dialog, which herdr itself reports as still working.
+Sessions read hooks when they start, so restart running ones. Without the hooks the plugin finds the dialog on screen,
+within 2 s.
+
 ## Search: any agent, on any machine
 
 `/` in the popup, or the `search` action straight from a key (`prefix+/` above), searches every agent on every

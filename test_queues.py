@@ -301,3 +301,18 @@ try:
 finally:
     q.permission, q.PERM_DIR = _perm, _dir
 print("ok")
+# an unreadable state is retried and then refused, never read as "no state" (that closed every heading entry)
+_st, _old, _sl = q.STATE, q.OLD_STATE, q.time.sleep
+try:
+    d = tempfile.mkdtemp(); q.STATE, q.OLD_STATE = os.path.join(d, "q.json"), os.path.join(d, "none.json")
+    q.time.sleep = lambda s: None
+    open(q.STATE, "w").close()
+    try:
+        q.load(); assert False, "empty state taken for the default"
+    except RuntimeError:
+        pass
+    q.write({"queues": ["a"], "members": {}, "entries": True, "saved": 1})
+    assert q.load()["entries"] and not [f for f in os.listdir(d) if f.endswith(".tmp")]
+finally:
+    q.STATE, q.OLD_STATE, q.time.sleep = _st, _old, _sl
+print("ok")

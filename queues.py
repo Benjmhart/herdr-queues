@@ -265,14 +265,19 @@ def summary(text):
 
 def load():
     for path in (STATE, OLD_STATE):
-        try:
-            with open(path) as f:
-                s = json.load(f)
-            if "streams" in s:  # herdr-streams' file
-                s = {"queues": s["streams"], "members": s["members"]}
-            return s
-        except (FileNotFoundError, ValueError):
-            continue
+        for _ in range(10):  # an unreadable copy is retried, never taken for "no state": the default has no headings,
+            try:             # so one bad read closed every heading entry (beast-arch 2026-11-22 09:36)
+                with open(path) as f:
+                    s = json.load(f)
+                if "streams" in s:  # herdr-streams' file
+                    s = {"queues": s["streams"], "members": s["members"]}
+                return s
+            except FileNotFoundError:
+                break
+            except ValueError:
+                time.sleep(0.1)
+        else:
+            raise RuntimeError("unreadable state: " + path)
     return {"queues": ["personal", "work"], "members": {}}
 
 
@@ -288,8 +293,9 @@ except (OSError, ValueError, AttributeError):
     old = 0
 if json.loads(new).get("saved", 0) >= old:
     os.makedirs(os.path.dirname(p), exist_ok=True)
-    open(p + ".tmp", "w").write(new)
-    os.replace(p + ".tmp", p)
+    tmp = p + ".%d.tmp" % os.getpid()  # one name per writer: a shared one let two writers swap in a half-written file
+    open(tmp, "w").write(new)
+    os.replace(tmp, p)
 '''
 
 
@@ -2218,7 +2224,12 @@ def nag(ms, notify=True):
     notify False (watch --no-notify) only the inactive marks are kept up."""
     seen, unsent = {}, {}
     while True:
-        ags, prompts, state, here, seen_elsewhere = [], [], load(), None, []
+        try:
+            state = load()
+        except RuntimeError:  # unreadable for a second: skip this pass rather than act on nothing
+            time.sleep(60)
+            continue
+        ags, prompts, here, seen_elsewhere = [], [], None, []
         for m in ms:
             try:
                 listed = real(json.loads(herdr(m, "agent", "list", timeout=4))["result"]["agents"])
