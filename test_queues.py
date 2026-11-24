@@ -191,8 +191,9 @@ assert q.sendkeys(names=["ctrl+b", "a", "slash"]) == "^ba/" and q.sendkeys(names
 assert q.sendkeys("a+b (x)~") == "a{+}b {(}x{)}{~}"
 
 # Windows titles herdr's window with the upper-case computer name (fleet 37, 2026-11-17)
-_w, q.windows = q.windows, lambda d=None: [("1", "WINVM: System32", True), ("2", "herdr: devbox: x", False), ("3", "Notes", False)]
-assert q.herdr_windows({"winvm", "devbox"}) == [("1", "winvm"), ("2", "devbox")]
+_w, q.windows = q.windows, lambda d=None: [("1", "WINVM: System32", True), ("2", "herdr: devbox: x", False), ("3", "Notes", False),
+                                         ("4", "bens-iMac.local: x", False)]
+assert q.herdr_windows({"winvm", "devbox", "bens-iMac"}) == [("1", "winvm"), ("2", "devbox"), ("4", "bens-iMac")]
 q.windows = _w
 st = {}                                                                   # per-host spinner speed
 assert q.setting(st, "host", [q.HOST, "spin", "1"]) is None and q.spin_rate(st) == 1.0
@@ -315,4 +316,32 @@ try:
     assert q.load()["entries"] and not [f for f in os.listdir(d) if f.endswith(".tmp")]
 finally:
     q.STATE, q.OLD_STATE, q.time.sleep = _st, _old, _sl
+print("ok")
+# a custom XDG_STATE_HOME / XDG_CONFIG_HOME on the far machine and here; a Mac's "name.local" is HOST "name"
+if not q.WIN:
+    x = tempfile.mkdtemp(); env = dict(os.environ, XDG_STATE_HOME=x + "/s", XDG_CONFIG_HOME=x + "/c")
+    subprocess.run(["sh", "-c", "python3 -c " + q.shlex.quote(q.KEEP_NEWEST) + " " + q.shlex.quote(q.REMOTE_STATE)],
+                   input='{"saved": 1}', text=True, env=env, check=True)
+    assert open(x + "/s/herdr/plugins/benjmhart.queues/queues.json").read() == '{"saved": 1}'
+    subprocess.run(["sh", "-c", "python3 -c " + q.shlex.quote(q.RELAY_SINK)], input='{"host": "pc", "agents": []}\n',
+                   text=True, env=env, check=True)
+    assert os.path.exists(x + "/s/herdr/plugins/benjmhart.queues/relay/pc.json")
+    out = subprocess.run(["sh", "-c", f'echo "{q.REMOTE_REQUESTS}"'], capture_output=True, text=True, env=env).stdout
+    assert out.strip() == x + "/s/herdr/plugins/benjmhart.queues/jump"
+    os.makedirs(x + "/c/herdr/plugins/config/benjmhart.machine-icons")
+    open(x + "/c/herdr/plugins/config/benjmhart.machine-icons/icons", "w").write("pc 🖥\n")
+    _xc = os.environ.get("XDG_CONFIG_HOME"); os.environ["XDG_CONFIG_HOME"] = x + "/c"
+    try:
+        assert q.machine_icons() == {"pc": "🖥"}
+    finally:
+        os.environ.pop("XDG_CONFIG_HOME") if _xc is None else os.environ.update(XDG_CONFIG_HOME=_xc)
+    assert "XDG_CONFIG_HOME" in q.HOOKS["on"]
+_gh = q.socket.gethostname
+try:
+    q.socket.gethostname = lambda: "bens-iMac.local"
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    assert m.HOST == "bens-iMac"
+finally:
+    q.socket.gethostname = _gh
+assert q.HOST == q.socket.gethostname().split(".")[0]
 print("ok")

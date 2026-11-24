@@ -53,11 +53,12 @@ STATE_DIR = os.environ.get("HERDR_PLUGIN_STATE_DIR") or os.path.join(STATE_ROOT,
 STATE = os.path.join(STATE_DIR, "queues.json")
 OLD_STATE = os.path.join(STATE_ROOT, "herdr/plugins/benjmhart.streams/streams.json")  # herdr-streams <= 0.3
 REQUESTS = os.path.join(STATE_DIR, "jump")  # "<host> <pane>" lines, followed by `queues.py watch`
-REMOTE_REQUESTS = "~/.local/state/herdr/plugins/" + PLUGIN + "/jump"
+# Paths on another machine, under its own XDG_STATE_HOME: REMOTE_REQUESTS for its shell, REMOTE_STATE for KEEP_NEWEST.
+REMOTE_REQUESTS = "${XDG_STATE_HOME:-$HOME/.local/state}/herdr/plugins/" + PLUGIN + "/jump"
 HERDR = os.environ.get("HERDR_BIN_PATH", "herdr")
 STANDALONE = "HERDR_PLUGIN_ID" not in os.environ
-HOST = socket.gethostname()
-REMOTE_STATE = "~/.local/state/herdr/plugins/" + PLUGIN + "/queues.json"
+HOST = socket.gethostname().split(".")[0]  # as machine-icons has it: a Mac's "name.local" is "name"
+REMOTE_STATE = "herdr/plugins/" + PLUGIN + "/queues.json"
 try:  # a regex, not tomllib: macOS's own python3 is 3.9, and tomllib is 3.11+
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "herdr-plugin.toml"), encoding="utf-8") as _f:
         VERSION = re.search(r'^version = "([^"]+)"', _f.read(), re.M).group(1)
@@ -121,7 +122,7 @@ def hostname_of(target):
                            capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired):
         return None
-    name = r.stdout.strip()
+    name = r.stdout.strip().split(".")[0]  # the machine's own HOST
     return name if r.returncode == 0 and re.fullmatch(r"[\w.-]{1,64}", name) else None
 
 
@@ -286,7 +287,8 @@ def load():
 # together went out in a race; a popup left open saved what it read when it opened.
 KEEP_NEWEST = r'''
 import json, os, sys
-p = os.path.expanduser(sys.argv[1]); new = sys.stdin.read()
+p = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), sys.argv[1])
+new = sys.stdin.read()
 try:
     old = json.load(open(p)).get("saved", 0)
 except (OSError, ValueError, AttributeError):
@@ -1200,7 +1202,7 @@ def refresh_once(fresh_info=True):
         ev = json.loads(os.environ.get("HERDR_PLUGIN_EVENT_JSON") or "{}").get("data", {}).get("pane_id")
         only = ev if os.environ.get("HERDR_PLUGIN_EVENT") == "pane.agent_status_changed" else None
         for a in listed:
-            a["host"], a["workspace"] = socket.gethostname(), wsn.get(a.get("workspace_id"), a.get("workspace_id"))
+            a["host"], a["workspace"] = HOST, wsn.get(a.get("workspace_id"), a.get("workspace_id"))
             if fresh_info and (only is None or a["pane_id"] == only):  # git and transcripts: not on a heading click
                 t = info(a, state)
                 reqs.append(["pane.report_metadata", {"pane_id": a["pane_id"], "source": INFO, "tokens": t}])
@@ -1210,7 +1212,7 @@ def refresh_once(fresh_info=True):
 
 
 def machine_icons():
-    path = os.path.join(os.environ["APPDATA"] if WIN else os.path.expanduser("~/.config"),
+    path = os.path.join(os.environ["APPDATA"] if WIN else os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
                         "herdr", "plugins", "config", "benjmhart.machine-icons", "icons")
     try:
         return dict(ln.split()[:2] for ln in open(path, encoding="utf-8") if len(ln.split()) >= 2 and ln[0] != "#")
@@ -1750,7 +1752,7 @@ def herdr_windows(hosts, d=None):
     """[(window id, host it shows)] of herdr windows, the active one first. Title: "[herdr: ]<hostname>: <workspace>"."""
     out, canon = [], {h.lower(): h for h in hosts}  # Windows titles it with the upper-case computer name
     for w, title, _ in windows(d):
-        h = canon.get(title.removeprefix("herdr: ").split(": ", 1)[0].lower())
+        h = canon.get(title.removeprefix("herdr: ").split(": ", 1)[0].split(".")[0].lower())  # "mac.local": HOST "mac"
         if h:
             out.append((w, h))
     return out
@@ -1910,7 +1912,7 @@ def follow(label, ms):
     """One machine's request file, forever: carry out each request in the window showing that machine."""
     shown_by, target = ms[label]
     path = os.path.expanduser(REQUESTS) if not target else REMOTE_REQUESTS
-    sh = f'mkdir -p "$(dirname {path})" && touch {path} && exec tail -n0 -F {path}'
+    sh = f'p="{path}"; mkdir -p "$(dirname "$p")" && touch "$p" && exec tail -n0 -F "$p"'
     cmd = [sys.executable, "-u", "-c", TAIL, path] if not target else [
         "ssh", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ConnectTimeout=10", target, sh]
     by_host = {h: lab for lab, (h, _) in ms.items()}
@@ -1938,7 +1940,7 @@ def follow(label, ms):
 
 RELAY_SINK = r'''
 import json, os, re, sys
-d = os.path.expanduser("~/.local/state/herdr/plugins/benjmhart.queues/relay")
+d = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "herdr/plugins/benjmhart.queues/relay")
 os.makedirs(d, exist_ok=True)
 for ln in sys.stdin:
     m = json.loads(ln)
@@ -2049,7 +2051,7 @@ def perm_hook(state):
 
 # The hook commands. "off" runs after every tool call, so it starts python only when this pane has a mark; both return
 # at once (backgrounded) so Claude never waits on the sidebar.
-_QPY = 'q=$(ls -dt "$HOME"/.config/herdr/plugins/github-installations/benjmhart.queues-*/*/checkout/queues.py 2>/dev/null | head -1); '
+_QPY = 'q=$(ls -dt "${XDG_CONFIG_HOME:-$HOME/.config}"/herdr/plugins/github-installations/benjmhart.queues-*/*/checkout/queues.py 2>/dev/null | head -1); '
 HOOKS = {"on": _QPY + '[ -n "$HERDR_PANE_ID" ] && [ -n "$q" ] && (python3 "$q" perm-hook on >/dev/null 2>&1 &); true',
          "off": '[ -e "${XDG_RUNTIME_DIR:-/tmp}/herdr-queues-perm/${HERDR_PANE_ID:-none}" ] && { ' + _QPY
                 + '[ -n "$q" ] && (python3 "$q" perm-hook off >/dev/null 2>&1 &); }; true'}

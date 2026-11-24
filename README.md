@@ -193,7 +193,7 @@ blocked mark, the refresh and focus hooks); the popup and search, in an attached
 pieces other machines run there over ssh (the request tail, the shared queues, the relay, socket calls), run locally,
 not yet from another machine. **Not on macOS:** the watcher's window switching and its notifications: it drives
 X11, Wayland and Windows windows, and macOS has none of its tools, so a Mac is a machine you reach, not the desk the
-watcher runs on. macOS's own `python3` is 3.9: it works; Goto keys are read only on 3.11+, which a Mac never needs.
+watcher runs on. A Mac's hostname `name.local` counts as `name`, as in herdr-machine-icons. macOS's own `python3` is 3.9: it works; Goto keys are read only on 3.11+, which a Mac never needs.
 
 ## One set of queues on every machine
 
