@@ -1748,11 +1748,16 @@ def focus(d, w):
         x11("windowfocus", "--sync", w)  # input focus too: activate alone leaves it elsewhere without a WM
 
 
+def title_host(title):
+    """The host a herdr window shows, lower case: "[herdr: ]<hostname>: <workspace>"; a Mac's "name.local" is "name"."""
+    return title.removeprefix("herdr: ").split(": ", 1)[0].split(".")[0].lower()
+
+
 def herdr_windows(hosts, d=None):
     """[(window id, host it shows)] of herdr windows, the active one first. Title: "[herdr: ]<hostname>: <workspace>"."""
     out, canon = [], {h.lower(): h for h in hosts}  # Windows titles it with the upper-case computer name
     for w, title, _ in windows(d):
-        h = canon.get(title.removeprefix("herdr: ").split(": ", 1)[0].split(".")[0].lower())  # "mac.local": HOST "mac"
+        h = canon.get(title_host(title))
         if h:
             out.append((w, h))
     return out
@@ -1806,7 +1811,7 @@ def jump(machine, pane, ms=None, shown_by=None):
         press(d, "Return")
         for _ in range(30):
             time.sleep(0.1)
-            if window_title(win[0], d).removeprefix("herdr: ").lower().startswith(target.lower() + ": "):
+            if title_host(window_title(win[0], d)) == target.lower():
                 break
     herdr(machine, "agent", "focus", pane)
 

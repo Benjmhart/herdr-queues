@@ -190,8 +190,10 @@ uses the same Windows driver through `powershell.exe`.
 Tested on Arch Linux and macOS 14 (Sonoma; an Intel VM, herdr 0.9.5 from herdr.dev's `install.sh`, the Command Line
 Tools' `python3` 3.9.6) on 2026-11-19: the tests; the plugin linked into a real herdr (sidebar labels, the spinner, the
 blocked mark, the refresh and focus hooks); the popup and search, in an attached client and on their own; and the
-pieces other machines run there over ssh (the request tail, the shared queues, the relay, socket calls), run locally,
-not yet from another machine. **Not on macOS:** the watcher's window switching and its notifications: it drives
+pieces other machines run there over ssh (the request tail, the shared queues, the relay, socket calls). On
+2026-11-23, from a Linux desk (headless sway) over real ssh: the Mac learnt as `bens-iMac`, queue changes made on either
+side reaching the other, the desk's agents relayed to the Mac, and jumps both ways (desk to a Mac agent, and from the
+Mac's window to a desk agent). **Not on macOS:** the watcher's window switching and its notifications: it drives
 X11, Wayland and Windows windows, and macOS has none of its tools, so a Mac is a machine you reach, not the desk the
 watcher runs on. A Mac's hostname `name.local` counts as `name`, as in herdr-machine-icons. macOS's own `python3` is 3.9: it works; Goto keys are read only on 3.11+, which a Mac never needs.
 
