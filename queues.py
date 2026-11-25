@@ -350,6 +350,29 @@ def learn(state, agents):
             for k in keys(a) + folder(a):
                 if k not in m:
                     m[k], new = qn, True
+        new = relearn(state, a) or new
+    return new
+
+
+def relearn(state, a):
+    """The same for everything else kept by keys(): lane, inactive, alerts off, revisit, pin, J/K order. A session-id
+    change (resume, /clear) then a reboot (new terminal ids) lost both mlabs-marketing lanes, beast-arch 2026-11-25:
+    only queue membership was re-keyed. Each found by any one current key takes the others too. True if any changed."""
+    ks, new = keys(a), False
+    for name in ("inactive", "quiet", *HAND):
+        have = state.get(name) or []
+        if any(k in have for k in ks) and not all(k in have for k in ks):
+            state[name], new = sorted(set(have) | set(ks)), True
+    ln = lane(state, a)
+    if ln and not all(k in state["lanes"] for k in ks):
+        state["lanes"].update({k: ln for k in ks})
+        new = True
+    for order in state.get("rank", {}).values():   # next to the key found, so the position is unchanged
+        at = [order.index(k) for k in ks if k in order]
+        miss = [k for k in ks if k not in order]
+        if at and miss:
+            order[min(at) + 1:min(at) + 1] = miss
+            new = True
     return new
 
 

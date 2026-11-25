@@ -357,4 +357,14 @@ try:
 finally:
     q.socket.gethostname = _gh
 assert q.HOST == q.socket.gethostname().split(".")[0]
+# 0.48.3: lanes, marks, flags and J/K order follow a session-id change, so a later reboot (new terminal) keeps them
+_old = {"pane_id": "w5:p6", "host": "beast-arch", "terminal_id": "T1", "agent_session": {"value": "S1"}, "cwd": "/m"}
+_st = {"queues": ["work"], "members": {}, "lanes": {}, "rank": {"work": ["x", "s:S1", "beast-arch/t:T1", "y"]}}
+q.set_lane(_st, _old, "chores"); q.set_inactive(_st, _old, True); q.set_flag(_st, _old, "pin", True)
+_resumed = dict(_old, agent_session={"value": "S2"})                     # same terminal, new session
+assert q.learn(_st, [_resumed]) and not q.learn(_st, [_resumed])          # learned once, then nothing new
+_rebooted = dict(_resumed, terminal_id="T9")                              # new terminal, the session kept
+assert q.lane(_st, _rebooted) == "chores" and q.inactive(_st, _rebooted) and q.flagged(_st, _rebooted, "pin")
+_o = _st["rank"]["work"]; _p = q.position(_st, "work", _rebooted)
+assert _o.index("x") < _p < _o.index("y"), _o                              # still between its neighbours
 print("ok")
