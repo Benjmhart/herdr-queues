@@ -2005,7 +2005,8 @@ def perm_watch(every=2):
     while True:
         time.sleep(every)
         try:
-            ch = perm_changes(json.loads(herdr(None, "agent", "list", timeout=4))["result"]["agents"])
+            ags = json.loads(herdr(None, "agent", "list", timeout=4))["result"]["agents"]
+            ch = perm_changes(ags) + draft_changes(ags)
             if ch:
                 call(None, ch)
                 refresh(fresh_info=False)
@@ -2093,6 +2094,19 @@ def perm_changes(agents):
         now = "1" if perm_on(a["pane_id"], a.get("agent_status")) else None
         if now != (a.get("tokens") or {}).get("queues_perm"):
             ch.append(["pane.report_metadata", {"pane_id": a["pane_id"], "source": INFO, "tokens": {"queues_perm": now}}])
+    return ch
+
+
+def draft_changes(agents):
+    """The 📝 mark follows the box: typing or deleting a draft fires no herdr event, so a mark set at the last status
+    change stayed after the draft was deleted (Ben 2026-11-25). Every stopped claude's box, on perm_watch's pass."""
+    ch = []
+    for a in agents:
+        if a.get("agent") != "claude" or a.get("agent_status") not in ("done", "idle"):
+            continue
+        now = "1" if draft(a["pane_id"]) else None
+        if now != (a.get("tokens") or {}).get("queues_draft"):
+            ch.append(["pane.report_metadata", {"pane_id": a["pane_id"], "source": INFO, "tokens": {"queues_draft": now}}])
     return ch
 
 

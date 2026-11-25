@@ -281,6 +281,19 @@ try:
 finally:
     q.permission = _perm
 
+# 0.48.2: the draft mark follows the box between status events (a deleted draft clears it, a new one sets it)
+_dr = q.draft
+try:
+    box = {"w1:p1": False, "w1:p2": True, "w1:p3": True}
+    q.draft = lambda pane: box[pane]
+    ch = q.draft_changes([{"agent": "claude", "pane_id": "w1:p1", "agent_status": "idle", "tokens": {"queues_draft": "1"}},  # deleted
+                          {"agent": "claude", "pane_id": "w1:p2", "agent_status": "done"},                                 # typed
+                          {"agent": "claude", "pane_id": "w1:p3", "agent_status": "working"}])                             # not stopped
+    assert [(c[1]["pane_id"], c[1]["tokens"]["queues_draft"]) for c in ch] == [("w1:p1", None), ("w1:p2", "1")], ch
+    assert not q.draft_changes([{"agent": "claude", "pane_id": "w1:p2", "agent_status": "idle", "tokens": {"queues_draft": "1"}}])
+finally:
+    q.draft = _dr
+
 # 0.47 event-driven permission marks: Claude hooks in settings, idempotent, others kept; a fresh hook mark wins
 import copy, time
 base = {"model": "x", "hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "bash herdr-agent-state.sh session"}]}]}}
