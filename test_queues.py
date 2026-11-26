@@ -415,6 +415,16 @@ assert q.park_note(_st, _rows[0]) == "  · parked" and q.park_note({}, _live) ==
 _st["parked"]["s:S1"]["phase"] = "asked"; assert q.park_note(_st, _live) == "  · parking (asked)"
 # the watcher's pass: an asked agent whose pane runs no agent any more is parked; another machine's is left alone
 _st["parked"]["s:S1"]["host"] = q.HOST
-assert q.park_pass(_st, [], now=5) and _st["parked"]["s:S1"]["phase"] == "parked"
-_st["parked"]["s:S1"].update(phase="asked", host="elsewhere"); assert not q.park_pass(_st, [])
+assert q.park_pass(_st, {q.HOST: ("", [])}, now=5) and _st["parked"]["s:S1"]["phase"] == "parked"
+_st["parked"]["s:S1"].update(phase="asked", host="elsewhere"); assert not q.park_pass(_st, {q.HOST: ("", [])})  # not reached
+assert q.park_pass(_st, {"elsewhere": ("carbon", [])}) and _st["parked"]["s:S1"]["phase"] == "parked"  # reached over ssh
+# another machine's agent: ready read from its screen, the reply after the ask, not the ask's own words
+_rd = q.herdr
+try:
+    q.herdr = lambda m, *a, **k: "> [herdr-queues] You are being parked ... one line exactly: PARK-READY. If work ...\n⏺ Saved, all stopped.\n\n  PARK-READY\n"
+    assert q.screen_ready("carbon", "w1:p1")
+    q.herdr = lambda m, *a, **k: "> [herdr-queues] You are being parked ... one line exactly: PARK-READY. If work ...\n⏺ Working on it\n"
+    assert not q.screen_ready("carbon", "w1:p1")
+finally:
+    q.herdr = _rd
 print("ok")

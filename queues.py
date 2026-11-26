@@ -1028,23 +1028,35 @@ def park_note(state, a):
     return "" if not rec else "  · parked" if rec.get("phase") == "parked" or a.get("parked") else "  · parking (asked)"
 
 
-def park_pass(state, here, now=None):
-    """The watcher's minute, for this machine's agents asked to park: /exit once one is stopped, its box empty and
-    its last reply ends PARK-READY; parked once its pane runs no agent. One that never answers stays asked. Mutates
-    state; True if it changed."""
+def screen_ready(machine, pane):
+    """PARK-READY on its own line on the agent's screen, after the ask (another machine's transcript isn't readable
+    from here; the screen is, over herdr's own connection)."""
+    try:
+        text = herdr(machine, "agent", "read", pane, "--source", "visible", timeout=4)
+    except (RuntimeError, OSError, subprocess.TimeoutExpired):
+        return False
+    text = text[text.rfind("You are being parked") + 1:] if "You are being parked" in text else text
+    return any(ln.strip().lstrip("⏺●•").strip().strip("*_`") == "PARK-READY" for ln in text.splitlines())
+
+
+def park_pass(state, reached, now=None):
+    """The watcher's minute, for agents asked to park on every machine it reached this pass ({host: (label, agents)};
+    label "" = here): /exit once one is stopped, its box empty and its last reply ends PARK-READY; parked once its pane
+    runs no agent. Every machine this desk reaches, not just its own: carbon runs no watcher (README: one per desk), so
+    its agents would stay asked for ever. One that never answers stays asked. Mutates state; True if it changed."""
     now, ch = now or time.time(), False
-    by_sid = {sid_of(a): a for a in here}
-    panes = {a["pane_id"] for a in here}
     for r in (state.get("parked") or {}).values():
-        if r.get("host") != HOST or r.get("phase") != "asked":
-            continue
-        a = by_sid.get(r["sid"])
-        if a is None and r.get("pane") not in panes:
+        if r.get("phase") != "asked" or r.get("host") not in reached:
+            continue   # not listed this pass: no news is not "gone"
+        m, agents = reached[r["host"]]
+        a = next((x for x in agents if sid_of(x) == r["sid"]), None)
+        if a is None and r.get("pane") not in {x["pane_id"] for x in agents}:
             r["phase"], r["parked_at"], ch = "parked", now, True
         elif (a and a.get("agent_status") in ("idle", "done") and now - r.get("exit_at", 0) > PARK_EXIT_AGAIN
-              and not draft(a["pane_id"]) and park_ready(last_reply(r["sid"]))):
+              and not draft(a["pane_id"], m)
+              and (park_ready(last_reply(r["sid"])) if m == "" else screen_ready(m, a["pane_id"]))):
             try:
-                submit(None, a["pane_id"], "/exit")
+                submit(m, a["pane_id"], "/exit")
                 r["exit_at"], ch = now, True
             except (RuntimeError, OSError, subprocess.TimeoutExpired):
                 pass
@@ -2497,7 +2509,7 @@ def nag(ms, notify=True):
         except RuntimeError:  # unreadable for a second: skip this pass rather than act on nothing
             time.sleep(60)
             continue
-        ags, prompts, here, seen_elsewhere = [], [], None, []
+        ags, prompts, here, seen_elsewhere, reached = [], [], None, [], {}
         for m in ms:
             try:
                 listed = real(json.loads(herdr(m, "agent", "list", timeout=4))["result"]["agents"])
@@ -2510,6 +2522,7 @@ def nag(ms, notify=True):
                     a["workspace"] = wsn.get(a.get("workspace_id"), a.get("workspace_id"))
                 ids = list(wsn)
                 listed.sort(key=lambda a: ids.index(a["workspace_id"]) if a.get("workspace_id") in ids else len(ids))
+                reached[ms[m][0]] = (m, listed)
                 if m == "":
                     here = listed
                 else:
@@ -2547,8 +2560,8 @@ def nag(ms, notify=True):
             if here is not None:
                 entries_sync(state, here)
                 call(None, changed(suggest_changes(state, here), here))
-                if park_pass(state, here):
-                    save(state)
+            if park_pass(state, reached):
+                save(state)
         except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError):
             pass
         now = time.time()
