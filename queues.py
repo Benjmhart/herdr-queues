@@ -14,8 +14,12 @@ each with one line of what it needs. Enter jumps to the agent, switching the her
   queues.py host H icon E | host H color C   a machine's emoji (overrides herdr-machine-icons) and colour
   queues.py host H spin N|off|default         machine H's spinner frames a second (default 1)
   queues.py headings queue|machine|off;  collapse Q;  mark own|herdr;  spinner on|off;  badge model|gitstatus V [E]
-  queues.py status NAME GLYPH|default;  status NAME color COLOUR|none;  status spin 'F1 F2 ...'|default   (NAME: blocked draft asks asks_seen done done_seen background idle working unknown revisit pin lowctx)
+  queues.py status NAME GLYPH|default;  status NAME color COLOUR|none;  status spin 'F1 F2 ...'|default   (NAME: blocked draft asks asks_seen done done_seen background idle working unknown revisit pin lowctx park)
   queues.py context N|off    flag (🪫) an agent with less than N % of its context left; off by default
+  queues.py park on|off      i also parks a Claude session: asked to wind down, it exits, Enter/i resumes it; off by default
+  queues.py park PANE|here   park that agent now (for scripts), whatever the setting
+  queues.py suggest-park N|off   "park?" on a stopped agent untouched for N days (default 3)
+  queues.py suggest-park-sidebar on|off   that suggestion as a sidebar mark too (💤; status park GLYPH); off by default
   queues.py revisit|pin PANE|here on|off   🔖 come back to it (cleared when you focus it; v) · 📌 stays (V)
   queues.py rows         herdr's [ui.sidebar.agents] for the mark style (colours are settings: it never changes)
   queues.py spin         the spinner (herdr starts it with the server)
@@ -66,7 +70,7 @@ except (OSError, AttributeError):
     VERSION = "?"
 HOSTS = os.path.join(STATE_DIR, "hosts.json")  # {ssh target: that machine's hostname}, learned by the watcher
 RELAY = os.path.join(STATE_DIR, "relay")  # <host>.json: agents of a machine this one can't reach (micro), sent by it
-ICON = {"working": "●", "blocked": "!", "done": "✓", "idle": "○"}
+ICON = {"working": "●", "blocked": "!", "done": "✓", "idle": "○", "parked": "z"}
 WAITING = ("blocked", "done")
 UNSORTED = "unsorted"
 PANE = re.compile(r"^[\w:.-]{1,64}$")
@@ -618,7 +622,7 @@ def set_quiet(state, agent, on):
 # Flags at the end of an agent's label (Ben 2026-11-19). revisit: set by hand, cleared when you next focus the agent
 # ("it's meant to be a revisit flag"); pin: set by hand, stays until you clear it; lowctx: below `context N` % left.
 # Every glyph is yours: `status revisit|pin|lowctx GLYPH|default`, like the marks.
-FLAGS = {"revisit": "🔖", "pin": "📌", "lowctx": "🪫"}
+FLAGS = {"revisit": "🔖", "pin": "📌", "lowctx": "🪫", "park": "💤"}
 HAND = ("revisit", "pin")  # the ones you set
 
 
@@ -642,7 +646,10 @@ def revisit(state, agent):
 def flags_of(state, a):
     """The agent's flags, in FLAGS order: [(name, glyph, words for the popup)]."""
     out = [(n, glyph(state, n), n) for n in HAND if flagged(state, a, n)]
-    return out + ([("lowctx", glyph(state, "lowctx"), f"{context_left(a)}% context left")] if low_context(state, a) else [])
+    out += [("lowctx", glyph(state, "lowctx"), f"{context_left(a)}% context left")] if low_context(state, a) else []
+    # park: the watcher's suggestion (queues_park); the sidebar shows it only with `suggest-park-sidebar on` (hiding)
+    return out + ([("park", glyph(state, "park"), "park?")] if (a.get("tokens") or {}).get("queues_park")
+                  and not inactive(state, a) else [])
 
 
 # Lanes (Ben 2026-11-18): a short tag of your own on one agent, to tell apart agents sharing a workspace ("urgent",
@@ -787,7 +794,12 @@ def info(a, state):
 
 def asks(sid):
     """True when the session's last reply ends on a question to you: it stopped for an answer, not with the job done."""
-    import glob
+    text = last_reply(sid)
+    return bool(text) and asks_text(text)
+
+
+def last_reply(sid):
+    """The text of the session's last assistant reply, None if you spoke after it (or no transcript here)."""
     for path in glob.glob(os.path.expanduser(f"~/.claude/projects/*/{sid}.jsonl")):
         with open(path, "rb") as fh:
             fh.seek(max(0, os.path.getsize(path) - 524288))
@@ -799,14 +811,14 @@ def asks(sid):
                 continue
             if e.get("type") == "user" and not any(c.get("type") == "tool_result" for c in
                                                    (e.get("message") or {}).get("content") or [] if isinstance(c, dict)):
-                return False  # you spoke after it
+                return None  # you spoke after it
             if e.get("type") != "assistant":
                 continue
             text = [c.get("text", "") for c in (e.get("message") or {}).get("content") or []
                     if isinstance(c, dict) and c.get("type") == "text"]
             if text:
-                return asks_text(text[-1])
-    return False
+                return text[-1]
+    return None
 
 
 # A request without a "?" (confluence-consist 2026-11-16: "Reply with pass or fail for each check."): a phrase that asks
@@ -832,11 +844,11 @@ BG = re.compile(r"· \d+ (shells?|background tasks?)\b")
 RULE = re.compile(r"^\s*─")
 
 
-def draft(pane):
+def draft(pane, machine=None):
     """A prompt typed into the agent's box and not sent (Ben 2026-11-19): the text between the box's two rules, Claude
     Code's dim (SGR 2) suggestion dropped, the ❯ mark and blanks stripped."""
     try:
-        ansi = herdr(None, "agent", "read", pane, "--source", "visible", "--ansi", timeout=4)
+        ansi = herdr(machine, "agent", "read", pane, "--source", "visible", "--ansi", timeout=4)
     except (RuntimeError, OSError, subprocess.TimeoutExpired):
         return False
     lines = [re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", re.sub(r"\x1b\[2m[^\x1b\n]*", "", ln)) for ln in ansi.split("\n")]
@@ -870,10 +882,216 @@ def background(pane):
         return False
 
 
+# --- parking (Ben 2026-11-26, fleet task 51): after a reboot every Claude session came back, the inactive ones too.
+# With `park on`, marking an agent inactive also asks it to wind down; once it answers PARK-READY the watcher on its
+# machine types /exit. Its pane is then a plain shell (nothing for herdr's restore to resume), and the popup keeps it
+# from state.parked {"s:<session>": record} until Enter or i resumes it. Nothing is ever killed: no ctrl+c, ctrl+d, Esc.
+PARK_ASK = ("[herdr-queues] You are being parked: this session will end and can be resumed later. At a safe point save "
+            "all your work (commit, or write down anything not saved), stop everything you started as gracefully as you "
+            "can (let background shells finish or stop them cleanly, finish or TaskStop subagents and monitors, stop any "
+            "loop), then end your reply with one line exactly: PARK-READY. If work is running now, finish it first.")
+PARK_CANCEL = "[herdr-queues] Parking cancelled: this session stays. Carry on as before."
+PARK_EXIT_AGAIN = 60  # s: /exit typed again if the agent is still there (the first one lost to a redraw)
+
+
+def sid_of(a):
+    return (a.get("agent_session") or {}).get("value")
+
+
+def park_ready(text):
+    """The reply's last non-blank line is exactly PARK-READY (markdown emphasis or backticks around it allowed)."""
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    return bool(lines) and lines[-1].strip("*_`") == "PARK-READY"
+
+
+def session_name(machine, pane):
+    """The Claude session's name: its ~/.claude/sessions/<pid>.json on this machine (a /rename lands there), else the
+    --name of its command line (herdr's restore starts `claude --name NAME --resume SID`)."""
+    try:
+        procs = json.loads(herdr(machine, "pane", "process-info", "--pane", pane))["result"]["process_info"]["foreground_processes"]
+    except (RuntimeError, OSError, ValueError, KeyError, subprocess.TimeoutExpired):
+        return None
+    for p in procs:
+        if p.get("name") != "claude":
+            continue
+        if not machine:
+            try:
+                with open(os.path.expanduser(f"~/.claude/sessions/{p['pid']}.json")) as fh:
+                    n = json.load(fh).get("name")
+                if n:
+                    return n
+            except (OSError, ValueError, KeyError):
+                pass
+        argv = p.get("argv") or []
+        if "--name" in argv[:-1]:
+            return argv[argv.index("--name") + 1]
+    return None
+
+
+def submit(machine, pane, text):
+    """herdr's agent prompt types the text and Enter. Where Enter is a newline (Ben's keybindings, alt+enter submits:
+    sandbox 2026-11-26, the ask sat in the box) the text is still there a second later, and alt+enter sends it. Under
+    Claude's default keys the box is empty by then and nothing more is sent."""
+    herdr(machine, "agent", "prompt", pane, text, timeout=10)
+    for _ in range(3):
+        time.sleep(1)
+        if not draft(pane, machine):
+            return
+        herdr(machine, "agent", "send-keys", pane, "alt+enter")
+
+
+def park(state, a):
+    """Ask the agent to wind down and keep what resuming it takes. Mutates state (save it after). A message."""
+    sid = sid_of(a)
+    if a.get("agent") != "claude" or not sid:
+        return "inactive (only a Claude session can be parked)"
+    if draft(a["pane_id"], a["machine"]):  # the ask would join your unsent text and send it
+        return "inactive, not parked: its box holds a draft (send or clear it, then i twice)"
+    submit(a["machine"], a["pane_id"], PARK_ASK)
+    state.setdefault("parked", {})["s:" + sid] = {
+        "host": a.get("host") or HOST, "sid": sid, "cwd": a.get("foreground_cwd") or a.get("cwd"),
+        "workspace_id": a.get("workspace_id"), "workspace": a.get("workspace"), "pane": a["pane_id"],
+        "terminal_id": a.get("terminal_id"), "name": session_name(a["machine"], a["pane_id"]),
+        "title": a.get("terminal_title_stripped"), "phase": "asked", "at": time.time()}
+    return "parking: asked it to wind down; it exits once it says PARK-READY"
+
+
+def unpark(state, a):
+    """i on an agent asked to park and still running: the park is off, and it is told so (whether or not it has
+    answered yet: one still winding down would otherwise stop everything for nothing)."""
+    rec = (state.get("parked") or {}).pop("s:" + (sid_of(a) or ""), None)
+    if rec:
+        try:
+            submit(a["machine"], a["pane_id"], PARK_CANCEL)
+        except (RuntimeError, OSError, subprocess.TimeoutExpired):
+            pass
+    return rec
+
+
+def resume_command(rec):
+    """The line typed into a shell to bring a parked session back. Claude finds a session by its folder, so cd first;
+    the model and permission flags come back with the session."""
+    cmd = f"claude --resume {shlex.quote(rec['sid'])}"
+    if rec.get("name"):
+        cmd += f" --name {shlex.quote(rec['name'])}"
+    return f"cd {shlex.quote(rec['cwd'])} && {cmd}" if rec.get("cwd") else cmd
+
+
+def at_shell(machine, pane):
+    """The pane exists, runs no agent, and its shell is in the foreground (nothing typed into a running program)."""
+    try:
+        if "agent" in json.loads(herdr(machine, "pane", "get", pane))["result"]["pane"]:
+            return False
+        pi = json.loads(herdr(machine, "pane", "process-info", "--pane", pane))["result"]["process_info"]
+    except (RuntimeError, OSError, ValueError, KeyError, subprocess.TimeoutExpired):
+        return False
+    return pi.get("foreground_process_group_id") == pi.get("shell_pid")
+
+
+def resume(state, rec, machine):
+    """Bring a parked session back on its machine (label; "" = here): its old pane if that sits at a shell, else a new
+    pane in its workspace (a new workspace if that is gone too). The pane id it runs in."""
+    pane = rec.get("pane")
+    if not (pane and at_shell(machine, pane)):
+        panes = []
+        try:
+            panes = json.loads(herdr(machine, "pane", "list", "--workspace", rec.get("workspace_id") or ""))["result"]["panes"]
+        except (RuntimeError, OSError, ValueError, KeyError, subprocess.TimeoutExpired):
+            pass
+        if panes:
+            r = herdr(machine, "pane", "split", panes[0]["pane_id"], "--direction", "right", "--no-focus",
+                      *(["--cwd", rec["cwd"]] if rec.get("cwd") else []))
+            pane = json.loads(r)["result"]["pane"]["pane_id"]
+        else:
+            r = json.loads(herdr(machine, "workspace", "create", "--no-focus", *(["--cwd", rec["cwd"]] if rec.get("cwd") else []),
+                                 *(["--label", rec["workspace"]] if rec.get("workspace") else [])))["result"]
+            pane = r["root_pane"]["pane_id"]
+        time.sleep(1)  # the new shell's prompt
+    herdr(machine, "pane", "run", pane, resume_command(rec))
+    return pane
+
+
+def parked_rows(state, agents, ms):
+    """The parked agents no machine lists any more, as rows for the popup (in their queue, from state)."""
+    live = {sid_of(a) for a in agents}
+    label = {h: lab for lab, (h, _) in ms.items()}
+    return [{"machine": label.get(r["host"], r["host"]), "host": r["host"], "pane_id": r.get("pane") or "",
+             "agent_session": {"value": r["sid"]}, "terminal_id": r.get("terminal_id"), "cwd": r.get("cwd") or "",
+             "workspace": r.get("workspace") or r.get("workspace_id") or "", "workspace_id": r.get("workspace_id"),
+             "terminal_title_stripped": r.get("name") or r.get("title") or "", "agent": "claude",
+             "agent_status": "parked", "tokens": {}, "parked": r}
+            for r in (state.get("parked") or {}).values() if r.get("sid") not in live]
+
+
+def park_note(state, a):
+    rec = (state.get("parked") or {}).get("s:" + (sid_of(a) or ""))
+    return "" if not rec else "  · parked" if rec.get("phase") == "parked" or a.get("parked") else "  · parking (asked)"
+
+
+def park_pass(state, here, now=None):
+    """The watcher's minute, for this machine's agents asked to park: /exit once one is stopped, its box empty and
+    its last reply ends PARK-READY; parked once its pane runs no agent. One that never answers stays asked. Mutates
+    state; True if it changed."""
+    now, ch = now or time.time(), False
+    by_sid = {sid_of(a): a for a in here}
+    panes = {a["pane_id"] for a in here}
+    for r in (state.get("parked") or {}).values():
+        if r.get("host") != HOST or r.get("phase") != "asked":
+            continue
+        a = by_sid.get(r["sid"])
+        if a is None and r.get("pane") not in panes:
+            r["phase"], r["parked_at"], ch = "parked", now, True
+        elif (a and a.get("agent_status") in ("idle", "done") and now - r.get("exit_at", 0) > PARK_EXIT_AGAIN
+              and not draft(a["pane_id"]) and park_ready(last_reply(r["sid"]))):
+            try:
+                submit(None, a["pane_id"], "/exit")
+                r["exit_at"], ch = now, True
+            except (RuntimeError, OSError, subprocess.TimeoutExpired):
+                pass
+    return ch
+
+
+# --- park suggestions (Ben 2026-11-26): a stopped agent nobody has touched for `suggest-park N` days (default 3)
+# gets queues_park on its own machine; the popup says "park?", the sidebar shows 💤 with `suggest-park-sidebar on`.
+TRANSCRIPT = {}  # session id -> its transcript's path: globbing every project folder each minute is wasteful
+
+
+def transcript_age(sid, now=None):
+    """Seconds since the session's transcript last changed, None without one here."""
+    for _ in range(2):
+        p = TRANSCRIPT.get(sid)
+        if p is None:
+            p = TRANSCRIPT[sid] = next(iter(glob.glob(os.path.expanduser(f"~/.claude/projects/*/{sid}.jsonl"))), "")
+        try:
+            return (now or time.time()) - os.path.getmtime(p) if p else None
+        except OSError:
+            TRANSCRIPT.pop(sid)  # moved or deleted: look again once
+    return None
+
+
+def suggest_park(state, a, age):
+    """Stopped, not inactive, not asking you something, no draft or permission dialog, transcript older than N days."""
+    days, t = state.get("suggest_park", 3), a.get("tokens") or {}
+    return bool(days and age is not None and age > days * 86400 and a.get("agent_status") in ("idle", "done")
+                and not inactive(state, a) and not t.get("queues_asks") and not t.get("queues_draft")
+                and not t.get("queues_perm"))
+
+
+def suggest_changes(state, here, now=None):
+    reqs = []
+    for a in here:
+        sid = sid_of(a)
+        on = a.get("agent") == "claude" and sid and suggest_park(state, a, transcript_age(sid, now))
+        reqs.append(["pane.report_metadata", {"pane_id": a["pane_id"], "source": INFO,
+                                              "tokens": {"queues_park": "1" if on else None}}])
+    return reqs
+
+
 ON = ("queues", "auto")  # the queue sidebar's modes (`s`): static queue order, or re-sorted every minute
 
 
-SETTINGS = ("color", "colorby", "headings", "collapse", "badge", "host", "mark", "spinner", "entries", "status", "context")
+SETTINGS = ("color", "colorby", "headings", "collapse", "badge", "host", "mark", "spinner", "entries", "status", "context",
+            "park", "suggest-park", "suggest-park-sidebar")
 
 
 def setting(state, cmd, args):
@@ -925,6 +1143,12 @@ def setting(state, cmd, args):
         state["low_context"] = None if args[0] == "off" else int(args[0])  # flag below this % of context left
     elif cmd == "spinner" and args[0] in ("on", "off"):
         state["spinner"] = args[0] == "on"
+    elif cmd == "park" and args[0] in ("on", "off"):  # i also parks (ends) a Claude session; off by default
+        state["park"] = args[0] == "on"
+    elif cmd == "suggest-park" and (args[0] == "off" or (args[0].isdigit() and int(args[0]) > 0)):
+        state["suggest_park"] = 0 if args[0] == "off" else int(args[0])  # days untouched; absent = 3
+    elif cmd == "suggest-park-sidebar" and args[0] in ("on", "off"):
+        state["suggest_park_sidebar"] = args[0] == "on"
     elif cmd == "entries" and args[0] in ("on", "off"):
         state["entries"] = args[0] == "on"
     elif cmd == "badge" and len(args) >= 2 and args[0] in ("model", "gitstatus"):
@@ -1387,7 +1611,7 @@ def hiding(state, agents, host=HOST):
         # green was hard to read on Ben's translucent terminal (2026-11-16). Blocked stays red (the 🔴 rule).
         mc = mark_colour(state, need(a)) if own else None  # the mark's colour takes the row, over the queue's
         body = label(a, qi, fmt, host_setting(state, a.get("host"), "icon"), lane(state, a),
-                     " ".join(g for _, g, _ in flags_of(state, a))) + (
+                     " ".join(g for n, g, _ in flags_of(state, a) if n != "park" or state.get("suggest_park_sidebar"))) + (
             marker(mc) if mc else "" if heads or entries else colour(a))
         if own:
             mark = mark_of(a, spin, state)
@@ -2322,6 +2546,9 @@ def nag(ms, notify=True):
             os.replace(OTHERS + ".tmp", OTHERS)
             if here is not None:
                 entries_sync(state, here)
+                call(None, changed(suggest_changes(state, here), here))
+                if park_pass(state, here):
+                    save(state)
         except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError):
             pass
         now = time.time()
@@ -2379,7 +2606,7 @@ def retoken(state, agents, agent, ms):
     if m not in ms or newer(state, ms[m][0]):  # relayed (micro): only its own watcher reaches its server
         return False
     try:
-        call(ms[m][1], hiding(state, [a for a in agents if a["machine"] == m], ms[m][0]))
+        call(ms[m][1], hiding(state, [a for a in agents if a["machine"] == m and not a.get("parked")], ms[m][0]))
         return True
     except (OSError, subprocess.SubprocessError):
         return False
@@ -2578,6 +2805,30 @@ def settings(scr, state, ms):
         changed = True
 
 
+def unpark_and_go(state, agents, a, ms):
+    """Enter or i on a parked row: resume it on its machine, then active again and gone to, like a jump. A message
+    when it can't (None: the list closes)."""
+    if a["machine"] not in ms:
+        return f"{a['host']}: not reachable from here (resume it from its own machine)"
+    try:
+        pane = resume(state, a["parked"], a["machine"])
+    except (RuntimeError, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as e:
+        return f"not resumed: {e}"
+    state.get("parked", {}).pop("s:" + sid_of(a), None)
+    set_inactive(state, a, False)
+    save(state)
+    for _ in range(30):  # the agent is focusable once herdr sees it start in the pane
+        try:
+            herdr(a["machine"], "agent", "get", pane)
+            break
+        except (RuntimeError, OSError, subprocess.TimeoutExpired):
+            time.sleep(0.5)
+    try:
+        return go(dict(a, pane_id=pane), ms)
+    except (RuntimeError, OSError, subprocess.TimeoutExpired):
+        return f"resumed in pane {pane}; it hasn't started yet"
+
+
 def go(agent, ms):
     """Enter. Returns a message when the jump can't happen from here, else None (the list closes)."""
     if not agent["machine"] and not STANDALONE:  # this server, and the popup's window is showing it
@@ -2672,6 +2923,7 @@ def ui(scr):
         if m != seen:
             state, seen, drawn = (load() if seen is not None else state), m, None
         agents, sums, version = live.snapshot()
+        agents += parked_rows(state, agents, ms)  # gone from every machine's list: kept from state
         qs = tabs(state, agents)
         if cur is None and live.loaded:  # open on the first queue with something waiting
             cur = next((i for i, s in enumerate(qs) if members(state, agents, s)), 0)
@@ -2726,7 +2978,7 @@ def ui(scr):
                 s = sums.get(skey(a)) if st in WAITING else ""
                 if i + top == sel:  # the selected line: one solid bar
                     line = f" {ICON.get(st, '?')} {(a['machine'] + ' · ') if a['machine'] else ''}{'[' + lane(state, a) + '] ' if lane(state, a) else ''}{a['workspace']}  {title}"
-                    line += "  · inactive" if inactive(state, a) else ""
+                    line += park_note(state, a) or ("  · inactive" if inactive(state, a) else "")
                     line += "  · no alerts" if quiet(state, a) else ""
                     line += "".join(f"  · {g} {words}" for _, g, words in flags_of(state, a))
                     line += f"  — {s if s is not None else '…'}" if st in WAITING else ""
@@ -2740,8 +2992,8 @@ def ui(scr):
                     x = put_str(scr, row, x, f"[{lane(state, a)}] ", C.get("machine", 0))
                 x = put_str(scr, row, x, a["workspace"], C.get("workspace", 0) | curses.A_BOLD) + 2
                 x = put_str(scr, row, x, title, curses.A_BOLD if st in WAITING else 0)
-                if inactive(state, a):
-                    x = put_str(scr, row, x, "  · inactive", C.get("help", 0))
+                if park_note(state, a) or inactive(state, a):
+                    x = put_str(scr, row, x, park_note(state, a) or "  · inactive", C.get("help", 0))
                 if quiet(state, a):
                     x = put_str(scr, row, x, "  · no alerts", C.get("help", 0))
                 for _, g, words in flags_of(state, a):
@@ -2768,6 +3020,11 @@ def ui(scr):
                 continue
             if c == "backspace":
                 query, sel = query[:-1], 0
+                continue
+            if c == "enter" and q and q[sel].get("parked"):
+                msg = unpark_and_go(state, agents, q[sel], ms)
+                if not msg:
+                    return
                 continue
             if c == "enter" and q:
                 mark_seen(state, agents, q[sel], ms)
@@ -2838,12 +3095,23 @@ def ui(scr):
             for a in {a["machine"]: a for a in agents}.values():
                 retoken(state, agents, a, ms)
             msg = f"{name}: {'collapsed' if name in state['collapsed'] else 'open'} in the sidebar"
+        elif c in ("i", "enter") and q and q[sel].get("parked"):  # resume it
+            msg = unpark_and_go(state, agents, q[sel], ms)
+            if not msg:
+                return
         elif c == "i" and q:
-            on = not inactive(state, q[sel])
-            set_inactive(state, q[sel], on)
+            on, a, note = not inactive(state, q[sel]), q[sel], ""
+            if not on and unpark(state, a):
+                note = "; parking cancelled, told to carry on"
+            set_inactive(state, a, on)
+            if on and state.get("park"):
+                try:
+                    note = "; " + park(state, a)
+                except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+                    note = f"; not parked: {e}"
             save(state)
             msg = (("inactive: hidden from herdr's sidebar" if on else "active: back in herdr's sidebar")
-                   if retoken(state, agents, q[sel], ms) else LATER)
+                   if retoken(state, agents, a, ms) else LATER) + note
         elif c in ("J", "K") and q:
             sel = move(state, agents, qs[cur], q[sel], 1 if c == "J" else -1, everyone)
             save(state)
@@ -2966,6 +3234,19 @@ def main(cmd):
         print(cmd if flagged(state, a, cmd) else f"no {cmd} flag")
     elif cmd == "refresh":  # herdr runs it on agent changes, renames and focus: this machine's tokens now
         refresh()
+    elif cmd == "park" and sys.argv[2:3] not in ([], ["on"], ["off"]):  # queues.py park PANE|here: park it now
+        pid = os.environ.get("HERDR_PANE_ID", "") if sys.argv[2] == "here" else sys.argv[2]
+        a = next((a for a in real(json.loads(herdr(None, "agent", "list"))["result"]["agents"]) if a["pane_id"] == pid), None)
+        if not a:
+            sys.exit(f"herdr-queues: no agent in pane {pid!r} on this machine")
+        ws = json.loads(herdr(None, "workspace", "list"))["result"]["workspaces"]
+        a.update(machine="", host=HOST, workspace=next((w.get("label") for w in ws if w["workspace_id"] == a.get("workspace_id")), None))
+        state = load()
+        set_inactive(state, a, True)
+        msg = park(state, a)
+        save(state)
+        refresh()
+        print(msg)
     elif cmd in SETTINGS:
         state, args = load(), sys.argv[2:]
         err = setting(state, cmd, args) if args else None
@@ -2974,7 +3255,8 @@ def main(cmd):
         if args:
             save(state)
         print(json.dumps({k: state.get(k) for k in ("icons", "colors", "hosts", "colorby", "headings", "collapsed",
-                                                    "mark", "spinner", "entries", "badges")}, ensure_ascii=False))
+                                                    "mark", "spinner", "entries", "badges", "park", "suggest_park",
+                                                    "suggest_park_sidebar")}, ensure_ascii=False))
     elif cmd == "spin":
         spin_loop()
     elif cmd == "focused":

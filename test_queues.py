@@ -368,3 +368,53 @@ assert q.lane(_st, _rebooted) == "chores" and q.inactive(_st, _rebooted) and q.f
 _o = _st["rank"]["work"]; _p = q.position(_st, "work", _rebooted)
 assert _o.index("x") < _p < _o.index("y"), _o                              # still between its neighbours
 print("ok")
+# 0.49: parking (fleet task 51). The settings: park off by default, suggest-park 3 days, sidebar mark off
+_s = {"queues": ["work"], "members": {}}
+assert not _s.get("park") and q.setting(_s, "park", ["maybe"]) and q.setting(_s, "park", ["on"]) is None and _s["park"]
+assert q.setting(_s, "suggest-park", ["0"]) and q.setting(_s, "suggest-park", ["x"])  # refused
+assert q.setting(_s, "suggest-park", ["off"]) is None and _s["suggest_park"] == 0
+assert q.setting(_s, "suggest-park", ["5"]) is None and _s["suggest_park"] == 5
+assert q.setting(_s, "suggest-park-sidebar", ["on"]) is None and _s["suggest_park_sidebar"]
+assert {"park", "suggest-park", "suggest-park-sidebar"} <= set(q.SETTINGS)
+assert q.setting(_s, "status", ["park", "😴"]) is None and q.glyph(_s, "park") == "😴" and q.glyph({}, "park") == "💤"
+# PARK-READY: the reply's last line, exactly (emphasis allowed); a mention earlier doesn't count
+assert q.park_ready("Committed abc123.\n\nPARK-READY") and q.park_ready("Done.\n**PARK-READY**\n")
+assert not q.park_ready("I'll say PARK-READY when done.") and not q.park_ready("PARK-READY\n\nOne more thing.")
+assert not q.park_ready(None) and not q.park_ready("PARK-READY now")
+# the resume command: cd to its folder, the session, its name quoted
+_r = {"sid": "S1", "cwd": "/p/my repo", "name": "castiron 🐺"}
+assert q.resume_command(_r) == "cd '/p/my repo' && claude --resume S1 --name 'castiron 🐺'"
+assert q.resume_command({"sid": "S1"}) == "claude --resume S1"
+# the suggestion: stopped, active, nothing asked, typed or pending, older than N days
+_d = 86400
+_a = {"agent_status": "idle", "tokens": {}, "agent_session": {"value": "S1"}, "host": "h", "pane_id": "p"}
+assert q.suggest_park({}, _a, 4 * _d) and not q.suggest_park({}, _a, 2 * _d) and not q.suggest_park({}, _a, None)
+assert not q.suggest_park({"suggest_park": 0}, _a, 99 * _d) and q.suggest_park({"suggest_park": 1}, _a, 2 * _d)
+assert q.suggest_park({}, dict(_a, agent_status="done"), 4 * _d) and not q.suggest_park({}, dict(_a, agent_status="working"), 4 * _d)
+for _t in ("queues_asks", "queues_draft", "queues_perm"):
+    assert not q.suggest_park({}, dict(_a, tokens={_t: "1"}), 4 * _d), _t
+_i = {}; q.set_inactive(_i, _a, True); assert not q.suggest_park(_i, _a, 4 * _d)
+# its mark: in the popup's flags always, in the sidebar label only with suggest-park-sidebar on
+_b = A("p9", "z", "idle"); _b["tokens"]["queues_park"] = "1"
+assert ("park", "💤", "park?") in q.flags_of({}, _b)
+_st = {"queues": ["work"], "members": {}, "sort": "queues"}
+_lab = lambda s: next(r[1]["tokens"]["queues_label"] for r in q.hiding(s, [_b]) if r[0] == "pane.report_metadata")
+assert "💤" not in _lab(_st) and "💤" in _lab(dict(_st, suggest_park_sidebar=True))
+# parked rows: gone from herdr's list, still in their queue from state; not while the agent still runs
+_live = {"pane_id": "w1:p1", "host": "h", "terminal_id": "T1", "agent_session": {"value": "S1"}, "cwd": "/m",
+         "workspace": "m", "workspace_id": "w1", "agent": "claude", "agent_status": "idle", "machine": ""}
+_st = {"queues": ["work"], "members": {}}
+q.put(_st, _live, "work"); q.set_inactive(_st, _live, True)
+_st["parked"] = {"s:S1": {"host": "h", "sid": "S1", "cwd": "/m", "workspace_id": "w1", "workspace": "m", "pane": "w1:p1",
+                          "terminal_id": "T1", "name": "m", "phase": "parked"}}
+_ms = {"": ("h", None)}
+assert q.parked_rows(_st, [_live], _ms) == []
+_rows = q.parked_rows(_st, [], _ms)
+assert len(_rows) == 1 and q.members(_st, _rows, "work", everyone=True) == _rows and _rows[0]["machine"] == "" and q.inactive(_st, _rows[0])
+assert q.park_note(_st, _rows[0]) == "  · parked" and q.park_note({}, _live) == ""
+_st["parked"]["s:S1"]["phase"] = "asked"; assert q.park_note(_st, _live) == "  · parking (asked)"
+# the watcher's pass: an asked agent whose pane runs no agent any more is parked; another machine's is left alone
+_st["parked"]["s:S1"]["host"] = q.HOST
+assert q.park_pass(_st, [], now=5) and _st["parked"]["s:S1"]["phase"] == "parked"
+_st["parked"]["s:S1"].update(phase="asked", host="elsewhere"); assert not q.park_pass(_st, [])
+print("ok")

@@ -135,6 +135,30 @@ pane id, because a saved-machine client applies the selected server's view to ev
 repeat across machines. Views and tokens don't survive a herdr restart, so the watcher puts them back once a minute;
 the mark itself is kept by the agent's session and terminal, like queue membership. `herdr agent list` is unchanged.
 
+### Parking: inactive, and the session ended (`park on`)
+
+An inactive agent keeps running, and herdr resumes it after a reboot. With `queues.py park on` (off by default),
+marking a Claude agent inactive also parks it (`queues.py park PANE|here` does it from a script):
+
+1. it is asked to save its work, stop what it started, and end its reply with the line `PARK-READY`;
+2. the watcher on its machine (once a minute) sees it stopped, its box empty and that line in its transcript, and
+   types `/exit`. Nothing is ever killed: no ctrl+c, ctrl+d or Esc. One that never answers stays "· parking (asked)";
+3. its pane is now a shell, and herdr's restore (`[session] resume_agents_on_restore`) has nothing to bring back;
+   the popup keeps the row, "· parked", in its queue on every machine (from the shared state);
+4. Enter or `i` on it resumes it: `cd <folder> && claude --resume <session> --name <name>` in its old pane if that is
+   at a shell, else in a new pane of its workspace; then it is active again and you are taken there.
+
+`i` on an agent still being asked cancels the park and tells it to carry on. Where Enter is a newline in Claude (your
+own keybindings), the prompts are sent with alt+enter when Enter left them in the box. Only a machine running the
+watcher parks its agents.
+
+### Park suggestions (`suggest-park N|off`)
+
+A stopped agent that is active, asks you nothing, has no draft and no permission dialog, and whose transcript hasn't
+changed for N days (default 3) gets the token `queues_park` on its machine (the watcher, once a minute): the popup
+shows "· 💤 park?". Nothing happens until you press `i`. `suggest-park-sidebar on` (off by default) shows 💤 in the
+sidebar label too; `status park GLYPH` picks another mark.
+
 ## Jumping to another machine: run the watcher where you sit
 
 A plugin can't switch the herdr window to another machine
